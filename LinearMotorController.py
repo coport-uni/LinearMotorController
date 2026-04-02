@@ -12,12 +12,12 @@ class LinearMotorController():
 
         self.ENQ = 0x05 # Enquiry
         self.EOT = 0x04 # End of transmission
-        self.ACK = 0x06 # Acknowledgement1
+        self.ACK = 0x06 # Acknowledgement
         self.NAK = 0x15 # Negative acknowledgement
 
     def _build_command(self, command: int, mode: int, params: bytes = b"") -> bytes: # empty bytes
         """
-        This funtion build a MINAS standard protocol data block. Axis is 1
+        This funtion build a MINAS standard protocol data block. Axis is 1 (0x01)
 
         Block layout:
             0x00 | 0x01 | (mode<<4) | command | params | checksum
