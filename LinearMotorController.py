@@ -226,11 +226,11 @@ class LinearMotorController():
         return None
 
     def _acquire_execution_rights(self) -> bool:
-        """Acquire execution rights for parameter writes.
+        """
+        This function acquire execution rights for parameter writes.
 
         Use command=1, mode=7 with param=0x01 (acquire).
-        Must be called before writing parameters. Release
-        with _release_execution_rights() when done.
+        Must be called before writing parameters. Release with _release_execution_rights() when done.
         """
         block = self._build_command(
             command=1, mode=7, params=bytes([0x01])
@@ -247,7 +247,8 @@ class LinearMotorController():
         return True
 
     def _release_execution_rights(self) -> bool:
-        """Release execution rights after parameter writes.
+        """
+        This function release execution rights after parameter writes.
 
         Use command=1, mode=7 with param=0x00 (release).
         """
@@ -265,14 +266,11 @@ class LinearMotorController():
             return False
         return True
 
-    def _write_parameter(
-            self, category: int, number: int, value: int
-    ) -> bool:
-        """Write a single parameter value (command=7, mode=1).
+    def _write_parameter(self, category: int, number: int, value: int) -> bool:
+        """
+        Write a single parameter value (command=7, mode=1).
 
-        Temporarily change a parameter in RAM. Use EEPROM write
-        (mode=2) to persist. Value is sent as signed 32-bit
-        little-endian.
+        Temporarily change a parameter in RAM. Use EEPROM write (mode=2) to persist. Value is sent as signed 32-bit little-endian.
         """
         value_bytes = value.to_bytes(
             4, byteorder="little", signed=True
@@ -292,10 +290,9 @@ class LinearMotorController():
             return False
         return True
 
-    def _read_parameter(
-            self, category: int, number: int
-    ) -> int | None:
-        """Read a single parameter value (command=7, mode=0).
+    def _read_parameter(self, category: int, number: int) -> int | None:
+        """
+        Read a single parameter value (command=7, mode=0).
 
         Return the 32-bit signed value, or None on error.
         """
@@ -321,14 +318,13 @@ class LinearMotorController():
         return None
 
     def move_speed(self, speed: int, duration: float) -> bool:
-        """Run the motor at a given speed for a duration.
+        """
+        Run the motor at a given speed for a duration.
 
-        Set internal speed command (Pr3.04), wait, then stop.
-        Require Pr0.01=1 (speed control, saved in EEPROM)
-        and SRV-ON from hardware X4 connector.
+        Set internal speed command (Pr3.04), wait, then stop. Require Pr0.01=1 (speed control, Must saved in EEPROM) and SRV-ON (29) from hardware X4 connector.
 
-        speed -- speed in r/min (positive=forward, negative=reverse)
-        duration -- run time in seconds
+        Speed -- speed in r/min (positive=forward, negative=reverse)
+        Duration -- run time in seconds
         """
         if not self._acquire_execution_rights():
             return False
@@ -344,15 +340,12 @@ class LinearMotorController():
 
         return True
 
-    def move_relative(self, pulse_offset: int,
-                      speed: int = 50,
-                      tolerance: int = 500,
-                      timeout: float = 10.0) -> int | None:
-        """Move the motor by pulse_offset from current position.
+    def move_relative(self, pulse_offset: int, speed: int = 50, tolerance: int = 500, timeout: float = 10.0) -> int | None:
+        """
+        Move the motor by pulse_offset from current position.
 
-        Set internal speed via Pr3.04 and monitor feedback
-        pulses until the target is reached within tolerance.
-        Require Pr0.01=1 (speed control) and SRV-ON.
+        Set internal speed via (Pr3.04) and monitor feedback pulses until the target is reached within tolerance.
+        Require (Pr0.01)=1 (speed control mode) and SRV-ON(x4, 26).
 
         pulse_offset -- displacement in encoder pulses
         speed -- speed in r/min (1~500, sign auto-set)
@@ -417,17 +410,15 @@ def main():
     print("\n--- Motor move test ---")
 
     while True:
-        print("Moving +5000 pulses...")
+        print("Moving +40000 pulses")
         lmc.move_relative(40000, speed=100)
-        print("Moving -5000 pulses...")
+        print("Moving -40000 pulses")
         time.sleep(1)
-
 
         lmc.move_relative(-40000, speed=100)
         final = lmc.read_feedback_pulse_position()
         print(f"Final position: {final}")
         time.sleep(1)
-
 
 if __name__ == "__main__":
     main()
