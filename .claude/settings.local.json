@@ -9,7 +9,8 @@
       "WebFetch(domain:mitcommlab.mit.edu)",
       "Bash(curl -s -L --max-time 15 \"https://mitcommlab.mit.edu/cee/commkit/coding-and-comment-style/\")",
       "Bash(python3)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(python3 -c ':*)"
     ]
   }
 }

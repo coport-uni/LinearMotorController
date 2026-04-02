@@ -12,7 +12,7 @@ class LinearMotorController():
 
         self.ENQ = 0x05 # Enquiry
         self.EOT = 0x04 # End of transmission
-        self.ACK = 0x06 # Acknowledgement
+        self.ACK = 0x06 # Acknowledgement1
         self.NAK = 0x15 # Negative acknowledgement
 
     def _build_command(self, command: int, mode: int, params: bytes = b"") -> bytes: # empty bytes
@@ -33,7 +33,7 @@ class LinearMotorController():
         return block + bytes([checksum_tc_mask])
 
     def _extract_params(self, response: bytes) -> tuple[bytes, int]:
-        """
+        """1
         This funtion extract parameter bytes and error code from a response. 
         """
         param_count = response[0]
@@ -66,6 +66,7 @@ class LinearMotorController():
 
             if data and data[0] == self.EOT:
                 eot_received =True
+
                 break
 
         if not eot_received:
@@ -199,6 +200,205 @@ class LinearMotorController():
 
         return None
 
+    def read_feedback_pulse_position(self) -> int | None:
+        """
+        This function read the current feedback pulse counter position.
+
+        Use command=2, mode=2. The value represents absolute position from the power-on origin: negative for reverse, positive for forward.
+        """
+        block = self._build_command(command=2, mode=2)
+        response = self._send_and_receive(block)
+        if response is None:
+            return None
+
+        params, error_code = self._extract_params(response)
+        if error_code & 0x80:
+            print(f"  Error code: 0x{error_code:02X}")
+            return None
+
+        if len(params) >= 5:
+            # 4-byte little-endian signed integer (L, H order)
+            position = int.from_bytes(
+                params[0:4], byteorder="little", signed=True
+            )
+            return position
+
+        return None
+
+    def _acquire_execution_rights(self) -> bool:
+        """Acquire execution rights for parameter writes.
+
+        Use command=1, mode=7 with param=0x01 (acquire).
+        Must be called before writing parameters. Release
+        with _release_execution_rights() when done.
+        """
+        block = self._build_command(
+            command=1, mode=7, params=bytes([0x01])
+        )
+        response = self._send_and_receive(block)
+        if response is None:
+            return False
+
+        params, error_code = self._extract_params(response)
+        if error_code & 0x80:
+            print(f"  Execution rights acquire failed: "
+                  f"0x{error_code:02X}")
+            return False
+        return True
+
+    def _release_execution_rights(self) -> bool:
+        """Release execution rights after parameter writes.
+
+        Use command=1, mode=7 with param=0x00 (release).
+        """
+        block = self._build_command(
+            command=1, mode=7, params=bytes([0x00])
+        )
+        response = self._send_and_receive(block)
+        if response is None:
+            return False
+
+        params, error_code = self._extract_params(response)
+        if error_code & 0x80:
+            print(f"  Execution rights release failed: "
+                  f"0x{error_code:02X}")
+            return False
+        return True
+
+    def _write_parameter(
+            self, category: int, number: int, value: int
+    ) -> bool:
+        """Write a single parameter value (command=7, mode=1).
+
+        Temporarily change a parameter in RAM. Use EEPROM write
+        (mode=2) to persist. Value is sent as signed 32-bit
+        little-endian.
+        """
+        value_bytes = value.to_bytes(
+            4, byteorder="little", signed=True
+        )
+        param_data = bytes([category, number]) + value_bytes
+        block = self._build_command(
+            command=7, mode=1, params=param_data
+        )
+        response = self._send_and_receive(block)
+        if response is None:
+            return False
+
+        params, error_code = self._extract_params(response)
+        if error_code & 0x80:
+            print(f"  Parameter write failed: "
+                  f"0x{error_code:02X}")
+            return False
+        return True
+
+    def _read_parameter(
+            self, category: int, number: int
+    ) -> int | None:
+        """Read a single parameter value (command=7, mode=0).
+
+        Return the 32-bit signed value, or None on error.
+        """
+        param_data = bytes([category, number])
+        block = self._build_command(
+            command=7, mode=0, params=param_data
+        )
+        response = self._send_and_receive(block)
+        if response is None:
+            return None
+
+        params, error_code = self._extract_params(response)
+        if error_code & 0x80:
+            print(f"  Parameter read failed: "
+                  f"0x{error_code:02X}")
+            return None
+
+        if len(params) >= 5:
+            value = int.from_bytes(
+                params[0:4], byteorder="little", signed=True
+            )
+            return value
+        return None
+
+    def move_speed(self, speed: int, duration: float) -> bool:
+        """Run the motor at a given speed for a duration.
+
+        Set internal speed command (Pr3.04), wait, then stop.
+        Require Pr0.01=1 (speed control, saved in EEPROM)
+        and SRV-ON from hardware X4 connector.
+
+        speed -- speed in r/min (positive=forward, negative=reverse)
+        duration -- run time in seconds
+        """
+        if not self._acquire_execution_rights():
+            return False
+
+        try:
+            self._write_parameter(3, 4, speed)
+            print(f"  Running at {speed} r/min"
+                  f" for {duration}s...")
+            time.sleep(duration)
+            self._write_parameter(3, 4, 0)
+        finally:
+            self._release_execution_rights()
+
+        return True
+
+    def move_relative(self, pulse_offset: int,
+                      speed: int = 50,
+                      tolerance: int = 500,
+                      timeout: float = 10.0) -> int | None:
+        """Move the motor by pulse_offset from current position.
+
+        Set internal speed via Pr3.04 and monitor feedback
+        pulses until the target is reached within tolerance.
+        Require Pr0.01=1 (speed control) and SRV-ON.
+
+        pulse_offset -- displacement in encoder pulses
+        speed -- speed in r/min (1~500, sign auto-set)
+        tolerance -- acceptable error in pulses
+        timeout -- maximum wait time in seconds
+
+        Return the final position, or None on failure.
+        """
+        start_pos = self.read_feedback_pulse_position()
+        if start_pos is None:
+            return None
+
+        target = start_pos + pulse_offset
+        direction = 1 if pulse_offset > 0 else -1
+        abs_speed = min(abs(speed), 500)
+        print(f"  Start={start_pos}, Target={target}")
+
+        if not self._acquire_execution_rights():
+            return None
+
+        try:
+            self._write_parameter(3, 4, direction * abs_speed)
+
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                current = self.read_feedback_pulse_position()
+                if current is None:
+                    break
+
+                remaining = (target - current) * direction
+                # Stop when reached or passed the target.
+                if remaining <= tolerance:
+                    break
+
+                time.sleep(0.01)
+
+            self._write_parameter(3, 4, 0)
+        finally:
+            self._release_execution_rights()
+
+        time.sleep(0.3)
+        final = self.read_feedback_pulse_position()
+        print(f"  Final={final}")
+        return final
+
+
 def main():
     """
     This function is scenario for simple testing
@@ -210,6 +410,24 @@ def main():
 
     version = lmc.read_software_version()
     print(f"Software version is {version}")
+
+    pulse_position = lmc.read_feedback_pulse_position()
+    print(f"Feedback pulse position is {pulse_position}")
+
+    print("\n--- Motor move test ---")
+
+    while True:
+        print("Moving +5000 pulses...")
+        lmc.move_relative(40000, speed=100)
+        print("Moving -5000 pulses...")
+        time.sleep(1)
+
+
+        lmc.move_relative(-40000, speed=100)
+        final = lmc.read_feedback_pulse_position()
+        print(f"Final position: {final}")
+        time.sleep(1)
+
 
 if __name__ == "__main__":
     main()
