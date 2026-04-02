@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dmesg)",
+      "Bash(udevadm info:*)",
+      "Bash(pdftotext \"/workspace/PanasonicRailController/MinasA6_드라이버.pdf\" -)",
+      "Bash(python3 read_version.py)",
+      "Bash(pdftotext \"/workspace/PanasonicRailController/MinasA6_드라이버2.pdf\" -)",
+      "WebFetch(domain:mitcommlab.mit.edu)",
+      "Bash(curl -s -L --max-time 15 \"https://mitcommlab.mit.edu/cee/commkit/coding-and-comment-style/\")",
+      "Bash(python3)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
