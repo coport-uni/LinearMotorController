@@ -229,104 +229,109 @@ class LinearMotorController():
         """
         This function acquire execution rights for parameter writes.
 
-        Use command=1, mode=7 with param=0x01 (acquire).
+        Use command=1, mode=7 with param = 0x01 (acquire).
         Must be called before writing parameters. Release with _release_execution_rights() when done.
         """
-        block = self._build_command(
-            command=1, mode=7, params=bytes([0x01])
-        )
+        block = self._build_command(command=1, mode=7, params=bytes([0x01]))
+
         response = self._send_and_receive(block)
         if response is None:
+            
             return False
 
         params, error_code = self._extract_params(response)
         if error_code & 0x80:
             print(f"  Execution rights acquire failed: "
                   f"0x{error_code:02X}")
+
             return False
+
         return True
 
     def _release_execution_rights(self) -> bool:
         """
         This function release execution rights after parameter writes.
 
-        Use command=1, mode=7 with param=0x00 (release).
+        Use command=1, mode=7 with param = 0x00 (release).
         """
-        block = self._build_command(
-            command=1, mode=7, params=bytes([0x00])
-        )
+        block = self._build_command(command = 1, mode = 7, params=bytes([0x00]))
         response = self._send_and_receive(block)
         if response is None:
+
             return False
 
         params, error_code = self._extract_params(response)
         if error_code & 0x80:
             print(f"  Execution rights release failed: "
                   f"0x{error_code:02X}")
+
             return False
+
         return True
 
     def _write_parameter(self, category: int, number: int, value: int) -> bool:
         """
-        Write a single parameter value (command=7, mode=1).
+        This function write a single parameter value.
 
-        Temporarily change a parameter in RAM. Use EEPROM write (mode=2) to persist. Value is sent as signed 32-bit little-endian.
+        Use command=7, mode=1. Temporarily change a parameter in RAM. Or use EEPROM write (mode=2) to persist. Value is sent as signed 32-bit little-endian.
         """
-        value_bytes = value.to_bytes(
-            4, byteorder="little", signed=True
-        )
+        value_bytes = value.to_bytes(4, byteorder="little", signed=True)
         param_data = bytes([category, number]) + value_bytes
-        block = self._build_command(
-            command=7, mode=1, params=param_data
-        )
+        block = self._build_command(command=7, mode=1, params=param_data)
         response = self._send_and_receive(block)
         if response is None:
+
             return False
 
         params, error_code = self._extract_params(response)
         if error_code & 0x80:
             print(f"  Parameter write failed: "
                   f"0x{error_code:02X}")
+
             return False
+
         return True
 
     def _read_parameter(self, category: int, number: int) -> int | None:
         """
-        Read a single parameter value (command=7, mode=0).
+        This function read a single parameter value 
 
-        Return the 32-bit signed value, or None on error.
+        Use command=7, mode=0. Return the 32-bit signed value, or None on error.
         """
         param_data = bytes([category, number])
-        block = self._build_command(
-            command=7, mode=0, params=param_data
-        )
+        block = self._build_command(command=7, mode=0, params=param_data)
         response = self._send_and_receive(block)
         if response is None:
+
             return None
 
         params, error_code = self._extract_params(response)
         if error_code & 0x80:
             print(f"  Parameter read failed: "
                   f"0x{error_code:02X}")
+
             return None
 
         if len(params) >= 5:
             value = int.from_bytes(
                 params[0:4], byteorder="little", signed=True
             )
+
             return value
+
         return None
 
     def move_speed(self, speed: int, duration: float) -> bool:
         """
-        Run the motor at a given speed for a duration.
+        This function run the motor at a given speed for a duration.
 
-        Set internal speed command (Pr3.04), wait, then stop. Require Pr0.01=1 (speed control, Must saved in EEPROM) and SRV-ON (29) from hardware X4 connector.
+        Set internal speed command (Pr3.04), wait, then stop. Require (Pr0.01=1) speed control mode and Must saved in EEPROM. Need SRV-ON (29) from hardware X4 connector.
 
-        Speed -- speed in r/min (positive=forward, negative=reverse)
-        Duration -- run time in seconds
+        Speed: speed in r/min (positive=forward, negative=reverse) # NTS: makering down on device!
+        Duration: run time in seconds
         """
         if not self._acquire_execution_rights():
+
             return False
 
         try:
@@ -335,6 +340,7 @@ class LinearMotorController():
                   f" for {duration}s...")
             time.sleep(duration)
             self._write_parameter(3, 4, 0)
+
         finally:
             self._release_execution_rights()
 
@@ -342,15 +348,15 @@ class LinearMotorController():
 
     def move_relative(self, pulse_offset: int, speed: int = 50, tolerance: int = 500, timeout: float = 10.0) -> int | None:
         """
-        Move the motor by pulse_offset from current position.
+        This function move the motor by pulse_offset from current position.
 
-        Set internal speed via (Pr3.04) and monitor feedback pulses until the target is reached within tolerance.
-        Require (Pr0.01)=1 (speed control mode) and SRV-ON(x4, 26).
+        Set internal speed (Pr3.04) and monitor feedback pulses until the target is reached within tolerance.
+        Require speed control mode (Pr0.01=1) and SRV-ON(x4, 26).
 
-        pulse_offset -- displacement in encoder pulses
-        speed -- speed in r/min (1~500, sign auto-set)
-        tolerance -- acceptable error in pulses
-        timeout -- maximum wait time in seconds
+        pulse_offset: displacement in encoder pulses
+        speed: speed in single rotatation/min (1~500, sign auto-set)
+        tolerance: acceptable error in pulses
+        timeout: maximum wait time in seconds
 
         Return the final position, or None on failure.
         """
@@ -364,6 +370,7 @@ class LinearMotorController():
         print(f"  Start={start_pos}, Target={target}")
 
         if not self._acquire_execution_rights():
+
             return None
 
         try:
@@ -373,22 +380,26 @@ class LinearMotorController():
             while time.time() - start_time < timeout:
                 current = self.read_feedback_pulse_position()
                 if current is None:
+
                     break
 
                 remaining = (target - current) * direction
                 # Stop when reached or passed the target.
                 if remaining <= tolerance:
+
                     break
 
                 time.sleep(0.01)
 
             self._write_parameter(3, 4, 0)
+
         finally:
             self._release_execution_rights()
 
-        time.sleep(0.3)
+        time.sleep(2)
         final = self.read_feedback_pulse_position()
         print(f"  Final={final}")
+
         return final
 
 
@@ -412,13 +423,12 @@ def main():
     while True:
         print("Moving +40000 pulses")
         lmc.move_relative(40000, speed=100)
-        print("Moving -40000 pulses")
-        time.sleep(1)
 
+        print("Moving -40000 pulses")
         lmc.move_relative(-40000, speed=100)
+
         final = lmc.read_feedback_pulse_position()
         print(f"Final position: {final}")
-        time.sleep(1)
 
 if __name__ == "__main__":
     main()
