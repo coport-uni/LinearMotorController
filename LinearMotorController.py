@@ -7,8 +7,8 @@ Communicate using the MINAS standard serial protocol
 import serial
 import time
 
-class LinearMotorController:
 
+class LinearMotorController:
     def __init__(self, port: str):
         """Initialize serial port with 8N1 MINAS standard settings."""
         self.ser = serial.Serial(
@@ -17,13 +17,14 @@ class LinearMotorController:
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE,
-            timeout=2)
+            timeout=2,
+        )
         self.id = 1
 
-        self.ENQ = 0x05 # Enquiry
-        self.EOT = 0x04 # End of transmission
-        self.ACK = 0x06 # Acknowledgement
-        self.NAK = 0x15 # Negative acknowledgement
+        self.ENQ = 0x05  # Enquiry
+        self.EOT = 0x04  # End of transmission
+        self.ACK = 0x06  # Acknowledgement
+        self.NAK = 0x15  # Negative acknowledgement
 
     def _build_command(
         self, command: int, mode: int, params: bytes = b""
@@ -43,19 +44,15 @@ class LinearMotorController:
 
         return block + bytes([checksum_byte])
 
-    def _extract_params(
-        self, response: bytes
-    ) -> tuple[bytes, int]:
+    def _extract_params(self, response: bytes) -> tuple[bytes, int]:
         """Extract parameter bytes and error code from a response."""
         param_count = response[0]
-        params = response[3:3 + param_count]
+        params = response[3 : 3 + param_count]
         error_code = params[-1] if params else 0xFF
 
         return params, error_code
 
-    def _send_and_receive(
-        self, block: bytes
-    ) -> bytes | None:
+    def _send_and_receive(self, block: bytes) -> bytes | None:
         """Send a command block and return the response block.
 
         Execute the RS485 handshake sequence:
@@ -90,7 +87,7 @@ class LinearMotorController:
         ack_data = self.ser.read(2)
         if len(ack_data) < 1:
             print("ACK response timeout.")
-            
+
             return None
 
         if ack_data[0] == self.NAK:
@@ -100,10 +97,10 @@ class LinearMotorController:
 
         if ack_data[0] != self.ACK:
             print(f"Unexpected response: 0x{ack_data[0]:02X}")
-            
+
             return None
 
-        enq_received = (len(ack_data) >= 2 and ack_data[1] == self.ENQ)
+        enq_received = len(ack_data) >= 2 and ack_data[1] == self.ENQ
 
         if not enq_received:
             start = time.time()
@@ -148,7 +145,7 @@ class LinearMotorController:
         if sum(response) & 0xFF != 0:
             print(f"  Checksum error (sum: 0x{sum(response) & 0xFF:02X}).")
             self.ser.write(bytes([self.NAK]))
-            
+
             return None
 
         self.ser.write(bytes([self.ACK]))
@@ -180,10 +177,7 @@ class LinearMotorController:
             minor_high = ver_high & 0x0F
             minor_low_tens = (ver_low >> 4) & 0x0F
             minor_low_ones = ver_low & 0x0F
-            return (
-                f"Ver.{major}"
-                f".{minor_high}{minor_low_tens}{minor_low_ones}"
-            )
+            return f"Ver.{major}.{minor_high}{minor_low_tens}{minor_low_ones}"
 
         return None
 
@@ -205,7 +199,9 @@ class LinearMotorController:
 
         if len(params) >= 2:
             model_bytes = params[:-1]
-            name = model_bytes.decode("ascii", errors="replace").rstrip("\x00 *")
+            name = model_bytes.decode("ascii", errors="replace").rstrip(
+                "\x00 *"
+            )
             return name if name else None
 
         return None
@@ -247,13 +243,11 @@ class LinearMotorController:
 
         response = self._send_and_receive(block)
         if response is None:
-            
             return False
 
         params, error_code = self._extract_params(response)
         if error_code & 0x80:
-            print(f"  Execution rights acquire failed: "
-                  f"0x{error_code:02X}")
+            print(f"  Execution rights acquire failed: 0x{error_code:02X}")
 
             return False
 
@@ -267,21 +261,17 @@ class LinearMotorController:
         block = self._build_command(command=1, mode=7, params=bytes([0x00]))
         response = self._send_and_receive(block)
         if response is None:
-
             return False
 
         params, error_code = self._extract_params(response)
         if error_code & 0x80:
-            print(f"  Execution rights release failed: "
-                  f"0x{error_code:02X}")
+            print(f"  Execution rights release failed: 0x{error_code:02X}")
 
             return False
 
         return True
 
-    def _write_parameter(
-        self, category: int, number: int, value: int
-    ) -> bool:
+    def _write_parameter(self, category: int, number: int, value: int) -> bool:
         """Write a single parameter value to RAM.
 
         Use command=7, mode=1. Value is sent as signed
@@ -293,21 +283,17 @@ class LinearMotorController:
         block = self._build_command(command=7, mode=1, params=param_data)
         response = self._send_and_receive(block)
         if response is None:
-
             return False
 
         params, error_code = self._extract_params(response)
         if error_code & 0x80:
-            print(f"  Parameter write failed: "
-                  f"0x{error_code:02X}")
+            print(f"  Parameter write failed: 0x{error_code:02X}")
 
             return False
 
         return True
 
-    def _read_parameter(
-        self, category: int, number: int
-    ) -> int | None:
+    def _read_parameter(self, category: int, number: int) -> int | None:
         """Read a single parameter value.
 
         Use command=7, mode=0. Return the 32-bit signed
@@ -317,28 +303,27 @@ class LinearMotorController:
         block = self._build_command(command=7, mode=0, params=param_data)
         response = self._send_and_receive(block)
         if response is None:
-
             return None
 
         params, error_code = self._extract_params(response)
         if error_code & 0x80:
-            print(f"  Parameter read failed: "
-                  f"0x{error_code:02X}")
+            print(f"  Parameter read failed: 0x{error_code:02X}")
 
             return None
 
         if len(params) >= 5:
-            value = int.from_bytes(
-                params[0:4], byteorder="little", signed=True
-            )
+            value = int.from_bytes(params[0:4], byteorder="little", signed=True)
 
             return value
 
         return None
 
     def move_relative(
-        self, pulse_offset: int, speed: int = 50,
-        tolerance: int = 500, timeout: float = 10.0
+        self,
+        pulse_offset: int,
+        speed: int = 50,
+        tolerance: int = 500,
+        timeout: float = 10.0,
     ) -> int | None:
         """Move the motor by pulse_offset pulses from current position.
 
@@ -366,7 +351,6 @@ class LinearMotorController:
         print(f"  Start={start_pos}, Target={target}")
 
         if not self._acquire_execution_rights():
-
             return None
 
         try:
@@ -376,13 +360,11 @@ class LinearMotorController:
             while time.time() - start_time < timeout:
                 current = self.read_feedback_pulse_position()
                 if current is None:
-
                     break
 
                 remaining = (target - current) * direction
                 # Stop when reached or passed the target.
                 if remaining <= tolerance:
-
                     break
 
                 time.sleep(0.01)
@@ -397,6 +379,7 @@ class LinearMotorController:
         print(f"  Final={final}")
 
         return final
+
 
 def main():
     """Run a simple motor movement test scenario."""
@@ -427,6 +410,7 @@ def main():
 
         final = lmc.read_feedback_pulse_position()
         print(f"Final position: {final}")
+
 
 if __name__ == "__main__":
     main()

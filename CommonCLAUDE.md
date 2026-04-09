@@ -63,7 +63,7 @@ All code follows the [MIT CommLab Coding and Comment Style](https://mitcommlab.m
 
 ### Language
 
-- All code comments, docstrings, commit messages, and documentation files (including README) must be written in **English**.
+- All code comments, docstrings, commit messages, documentation files (including README), **GitHub issues, and pull requests** must be written in **English**.
 
 ### Documentation
 
@@ -167,3 +167,19 @@ Tests exist to verify the **correctness and quality** of code. Code quality must
    ```
 
 3. **Code quality first**: Prioritize readability, maintainability, and correctness over whether tests pass. If a test fails, fix the logic correctly rather than tricking the test.
+
+---
+
+## 5. Linting
+
+All Python code must pass **Ruff** checks before committing.
+
+### Rules
+
+1. **Line length**: 80 columns (`line-length = 80` in `ruff.toml`).
+2. **Run on every commit**: Before committing, run:
+   ```bash
+   ruff check <file>.py
+   ruff format --check <file>.py
+   ```
+3. **Fix before committing**: If either command reports errors, fix them before proceeding. Use `ruff format <file>.py` to auto-format.
