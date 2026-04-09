@@ -1,7 +1,13 @@
+"""Control a Panasonic MINAS A6 servo amplifier over RS485.
+
+Communicate using the MINAS standard serial protocol
+(ENQ/EOT/ACK/NAK handshaking) at 9600 bps, 8N1.
+"""
+
 import serial
 import time
 
-class LinearMotorController():
+class LinearMotorController:
 
     def __init__(self, port: str):
         """Initialize serial port with 8N1 MINAS standard settings."""
@@ -30,7 +36,7 @@ class LinearMotorController():
             N | 0x01 | (mode<<4)|command | params | checksum
         """
         param_count = len(params)
-        mode_command = ((mode & 0x0F) << 4) | (command & 0x0F) # Mapping mode and command
+        mode_command = ((mode & 0x0F) << 4) | (command & 0x0F)
         block = bytes([param_count, 1, mode_command]) + params
 
         checksum_byte = (-sum(block)) & 0xFF
@@ -394,7 +400,12 @@ class LinearMotorController():
 
 def main():
     """Run a simple motor movement test scenario."""
-    lmc = LinearMotorController("/dev/ttyUSB0")
+    serial_port = "/dev/ttyUSB0"
+    test_pulse_offset = 40000
+    test_speed = 100
+    test_iterations = 3
+
+    lmc = LinearMotorController(serial_port)
 
     model = lmc.read_model_name()
     print(f"Model name is {model}")
@@ -407,12 +418,12 @@ def main():
 
     print("\n--- Motor move test ---")
 
-    for i in range(3):
-        print("Moving +40000 pulses")
-        lmc.move_relative(40000, speed=100)
+    for i in range(test_iterations):
+        print(f"Moving + {test_pulse_offset} pulses")
+        lmc.move_relative(test_pulse_offset, speed=test_speed)
 
-        print("Moving -40000 pulses")
-        lmc.move_relative(-40000, speed=100)
+        print(f"Moving - {test_pulse_offset} pulses")
+        lmc.move_relative(-test_pulse_offset, speed=test_speed)
 
         final = lmc.read_feedback_pulse_position()
         print(f"Final position: {final}")

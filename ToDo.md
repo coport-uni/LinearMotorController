@@ -31,3 +31,19 @@
 - [ ] Install cable carrier (케이블캐리어) for cable protection
 - [ ] Create GitHub issue
 - [ ] Commit and push
+
+---
+
+## Task 3: Fix Remaining MIT Convention Violations
+
+**Date**: 2025-04-09
+**GitHub Issue**: #3
+
+### Checklist
+
+- [x] Add module-level docstring
+- [x] Remove empty parentheses from class declaration
+- [x] Remove redundant comment (`# Mapping mode and command`)
+- [x] Extract magic numbers in `main()` to named constants
+- [x] Verify motor runs correctly
+- [x] Commit and push
