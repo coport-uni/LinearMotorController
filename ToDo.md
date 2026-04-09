@@ -47,3 +47,19 @@
 - [x] Extract magic numbers in `main()` to named constants
 - [x] Verify motor runs correctly
 - [x] Commit and push
+
+---
+
+## Task 4: Add Ruff Linting & Enforce English for Issues/PRs
+
+**Date**: 2025-04-09
+**GitHub Issue**: #4
+
+### Checklist
+
+- [x] Create `ruff.toml` with `line-length = 80`
+- [x] Apply `ruff format` to `LinearMotorController.py`
+- [x] Add linting section (§5) to `CommonCLAUDE.md` and `CLAUDE.md`
+- [x] Extend language rule to cover GitHub issues and PRs
+- [x] Verify motor runs correctly
+- [x] Commit and push
