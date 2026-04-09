@@ -8,7 +8,6 @@ This project provides a Python class (`LinearMotorController`) that communicates
 
 - Read amplifier model name and software version
 - Read the current motor position (feedback pulse counter)
-- Move the motor at a specified speed for a given duration
 - Move the motor to a relative position with pulse-level monitoring
 
 ## Tested Hardware
@@ -45,9 +44,6 @@ lmc = LinearMotorController("/dev/ttyUSB0")
 print(lmc.read_model_name())           # "MDDLN45SL"
 print(lmc.read_software_version())     # "Ver.1.016"
 print(lmc.read_feedback_pulse_position())  # current position in pulses
-
-# Move motor at 50 r/min for 2 seconds
-lmc.move_speed(50, duration=2.0)
 
 # Move motor +5000 pulses from current position
 lmc.move_relative(5000, speed=10)
@@ -90,13 +86,6 @@ Read the logical input signal states. Return a dict:
     "p_ot": True,          # Positive overtravel (True = not triggered)
 }
 ```
-
-### `move_speed(speed, duration) -> bool`
-
-Run the motor at a constant speed for a specified duration.
-
-- `speed` -- speed in r/min. Positive = forward, negative = reverse.
-- `duration` -- run time in seconds.
 
 ### `move_relative(pulse_offset, speed=50, tolerance=500, timeout=10.0) -> int | None`
 

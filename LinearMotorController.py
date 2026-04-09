@@ -4,10 +4,14 @@ import time
 class LinearMotorController():
 
     def __init__(self, port: str):
-        """
-        This funtion initialize serial and connection parameters. In this config, we use 8N1 and MINAS stardard.
-        """
-        self.ser = serial.Serial(port=port, baudrate=9600, bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE, stopbits=serial.STOPBITS_ONE, timeout=2)
+        """Initialize serial port with 8N1 MINAS standard settings."""
+        self.ser = serial.Serial(
+            port=port,
+            baudrate=9600,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=2)
         self.id = 1
 
         self.ENQ = 0x05 # Enquiry
@@ -15,42 +19,44 @@ class LinearMotorController():
         self.ACK = 0x06 # Acknowledgement
         self.NAK = 0x15 # Negative acknowledgement
 
-    def _build_command(self, command: int, mode: int, params: bytes = b"") -> bytes: # empty bytes
-        """
-        This funtion build a MINAS standard protocol data block. Axis is 1 (0x01)
+    def _build_command(
+        self, command: int, mode: int, params: bytes = b""
+    ) -> bytes:
+        """Build a MINAS standard protocol data block.
+
+        Axis is fixed to 1 (0x01).
 
         Block layout:
-            0x00 | 0x01 | (mode<<4) | command | params | checksum
+            N | 0x01 | (mode<<4)|command | params | checksum
         """
         param_count = len(params)
         mode_command = ((mode & 0x0F) << 4) | (command & 0x0F) # Mapping mode and command
         block = bytes([param_count, 1, mode_command]) + params
 
-        checksum = sum(block)
-        checksum_tc= -sum(block) # complement 
-        checksum_tc_mask= -sum(block) & 0xFF # masking
+        checksum_byte = (-sum(block)) & 0xFF
 
-        return block + bytes([checksum_tc_mask])
+        return block + bytes([checksum_byte])
 
-    def _extract_params(self, response: bytes) -> tuple[bytes, int]:
-        """1
-        This funtion extract parameter bytes and error code from a response. 
-        """
+    def _extract_params(
+        self, response: bytes
+    ) -> tuple[bytes, int]:
+        """Extract parameter bytes and error code from a response."""
         param_count = response[0]
         params = response[3:3 + param_count]
         error_code = params[-1] if params else 0xFF
 
         return params, error_code
 
-    def _send_and_receive(self, block: bytes) -> bytes | None:
-        """
-        This function send a command block and return the response block.
+    def _send_and_receive(
+        self, block: bytes
+    ) -> bytes | None:
+        """Send a command block and return the response block.
 
-        Execute the RS485 handshake sequence
-            1) host->amp: module_byte+ENQ, amp->host: EOT,
-            2) host->amp: data block,      amp->host: ACK+ENQ,
-            3) host->amp: module_byte+EOT, amp->host: response block,
-            4) host->amp: ACK.
+        Execute the RS485 handshake sequence:
+            1) host->amp: module_byte+ENQ, amp->host: EOT
+            2) host->amp: data block,      amp->host: ACK+ENQ
+            3) host->amp: module_byte+EOT, amp->host: response
+            4) host->amp: ACK
 
         Return the raw response bytes, or None on failure.
         """
@@ -65,7 +71,7 @@ class LinearMotorController():
             data = self.ser.read(1)
 
             if data and data[0] == self.EOT:
-                eot_received =True
+                eot_received = True
 
                 break
 
@@ -144,11 +150,10 @@ class LinearMotorController():
         return response
 
     def read_software_version(self) -> str | None:
-        """
-        This function read and return the amplifier software version string.
+        """Read the amplifier software version string.
 
-        Use command=0, mode=1. Version is BCD-encoded in two bytes:
-        high=X0h, low=YZh -> "Ver.X.0YZ".
+        Use command=0, mode=1. Version is BCD-encoded in
+        two bytes: high=X0h, low=YZh -> "Ver.X.0YZ".
         """
         block = self._build_command(command=0, mode=1)
         response = self._send_and_receive(block)
@@ -177,10 +182,9 @@ class LinearMotorController():
         return None
 
     def read_model_name(self) -> str | None:
-        """
-        This function read a 12-character ASCII model name from the amplifier.
+        """Read a 12-character ASCII model name from the amp.
 
-        Use command=0 with the given mode (5=amp, 6=motor).
+        Use command=0, mode=5 (amp model).
         """
         block = self._build_command(command=0, mode=5)
         response = self._send_and_receive(block)
@@ -201,10 +205,11 @@ class LinearMotorController():
         return None
 
     def read_feedback_pulse_position(self) -> int | None:
-        """
-        This function read the current feedback pulse counter position.
+        """Read the current feedback pulse counter position.
 
-        Use command=2, mode=2. The value represents absolute position from the power-on origin: negative for reverse, positive for forward.
+        Use command=2, mode=2. The value represents absolute
+        position from the power-on origin: negative for
+        reverse, positive for forward.
         """
         block = self._build_command(command=2, mode=2)
         response = self._send_and_receive(block)
@@ -226,11 +231,11 @@ class LinearMotorController():
         return None
 
     def _acquire_execution_rights(self) -> bool:
-        """
-        This function acquire execution rights for parameter writes.
+        """Acquire execution rights for parameter writes.
 
-        Use command=1, mode=7 with param = 0x01 (acquire).
-        Must be called before writing parameters. Release with _release_execution_rights() when done.
+        Use command=1, mode=7 with param=0x01 (acquire).
+        Must be called before writing parameters. Release
+        with _release_execution_rights() when done.
         """
         block = self._build_command(command=1, mode=7, params=bytes([0x01]))
 
@@ -249,12 +254,11 @@ class LinearMotorController():
         return True
 
     def _release_execution_rights(self) -> bool:
-        """
-        This function release execution rights after parameter writes.
+        """Release execution rights after parameter writes.
 
-        Use command=1, mode=7 with param = 0x00 (release).
+        Use command=1, mode=7 with param=0x00 (release).
         """
-        block = self._build_command(command = 1, mode = 7, params=bytes([0x00]))
+        block = self._build_command(command=1, mode=7, params=bytes([0x00]))
         response = self._send_and_receive(block)
         if response is None:
 
@@ -269,11 +273,14 @@ class LinearMotorController():
 
         return True
 
-    def _write_parameter(self, category: int, number: int, value: int) -> bool:
-        """
-        This function write a single parameter value.
+    def _write_parameter(
+        self, category: int, number: int, value: int
+    ) -> bool:
+        """Write a single parameter value to RAM.
 
-        Use command=7, mode=1. Temporarily change a parameter in RAM. Or use EEPROM write (mode=2) to persist. Value is sent as signed 32-bit little-endian.
+        Use command=7, mode=1. Value is sent as signed
+        32-bit little-endian. Use mode=2 to persist to
+        EEPROM instead.
         """
         value_bytes = value.to_bytes(4, byteorder="little", signed=True)
         param_data = bytes([category, number]) + value_bytes
@@ -292,11 +299,13 @@ class LinearMotorController():
 
         return True
 
-    def _read_parameter(self, category: int, number: int) -> int | None:
-        """
-        This function read a single parameter value 
+    def _read_parameter(
+        self, category: int, number: int
+    ) -> int | None:
+        """Read a single parameter value.
 
-        Use command=7, mode=0. Return the 32-bit signed value, or None on error.
+        Use command=7, mode=0. Return the 32-bit signed
+        value, or None on error.
         """
         param_data = bytes([category, number])
         block = self._build_command(command=7, mode=0, params=param_data)
@@ -321,42 +330,23 @@ class LinearMotorController():
 
         return None
 
-    def move_speed(self, speed: int, duration: float) -> bool:
-        """
-        This function run the motor at a given speed for a duration.
+    def move_relative(
+        self, pulse_offset: int, speed: int = 50,
+        tolerance: int = 500, timeout: float = 10.0
+    ) -> int | None:
+        """Move the motor by pulse_offset pulses from current position.
 
-        Set internal speed command (Pr3.04), wait, then stop. Require (Pr0.01=1) speed control mode and Must saved in EEPROM. Need SRV-ON (29) from hardware X4 connector.
+        Set internal speed (Pr3.04) and monitor feedback
+        pulses until the target is reached within tolerance.
+        Require speed control mode (Pr0.01=1) and
+        SRV-ON (X4, pin 26).
 
-        Speed: speed in r/min (positive=forward, negative=reverse) # NTS: makering down on device!
-        Duration: run time in seconds
-        """
-        if not self._acquire_execution_rights():
-
-            return False
-
-        try:
-            self._write_parameter(3, 4, speed)
-            print(f"  Running at {speed} r/min"
-                  f" for {duration}s...")
-            time.sleep(duration)
-            self._write_parameter(3, 4, 0)
-
-        finally:
-            self._release_execution_rights()
-
-        return True
-
-    def move_relative(self, pulse_offset: int, speed: int = 50, tolerance: int = 500, timeout: float = 10.0) -> int | None:
-        """
-        This function move the motor by pulse_offset from current position.
-
-        Set internal speed (Pr3.04) and monitor feedback pulses until the target is reached within tolerance.
-        Require speed control mode (Pr0.01=1) and SRV-ON(x4, 26).
-
-        pulse_offset: displacement in encoder pulses
-        speed: speed in single rotatation/min (1~500, sign auto-set)
-        tolerance: acceptable error in pulses
-        timeout: maximum wait time in seconds
+        Args:
+            pulse_offset -- displacement in encoder pulses
+            speed -- rotation speed in r/min (1~500,
+                sign auto-set)
+            tolerance -- acceptable error in pulses
+            timeout -- maximum wait time in seconds
 
         Return the final position, or None on failure.
         """
@@ -402,11 +392,8 @@ class LinearMotorController():
 
         return final
 
-
 def main():
-    """
-    This function is scenario for simple testing
-    """
+    """Run a simple motor movement test scenario."""
     lmc = LinearMotorController("/dev/ttyUSB0")
 
     model = lmc.read_model_name()
@@ -420,7 +407,7 @@ def main():
 
     print("\n--- Motor move test ---")
 
-    while True:
+    for i in range(3):
         print("Moving +40000 pulses")
         lmc.move_relative(40000, speed=100)
 
