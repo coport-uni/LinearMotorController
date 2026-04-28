@@ -7,8 +7,8 @@ Python controller for Panasonic MINAS A6 series servo amplifiers driving linear 
 This project provides a Python class (`LinearMotorController`) that communicates with a Panasonic MINAS A6 servo amplifier using the **MINAS standard serial protocol** over RS485. It can:
 
 - Read amplifier model name and software version
-- Read the current motor position (feedback pulse counter)
-- Move the motor to a relative position with pulse-level monitoring
+- Read the current motor position (encoder pulses or mm)
+- Move the motor in millimeters, both relative and absolute, with software closed-loop reaching ±0.1 mm precision
 
 ## Tested Hardware
 
@@ -24,7 +24,7 @@ The amplifier must be configured with the following parameters via the front pan
 | `Pr5.37*` | **0** | MINAS standard protocol (factory default) |
 | `Pr5.30*` | **2** | RS485 baud rate = 9600 bps (factory default) |
 | `Pr5.31*` | **1** | Slave ID / axis number (factory default) |
-| `Pr0.01*` | **1** | Speed control mode. **Must be changed from factory default (0).** and Save to EEPROM and cycle power. |
+| `Pr0.01*` | **1** | Speed control mode. **Must be changed from factory default (0).** Save to EEPROM and cycle power. |
 | `Pr3.00`  | **1** | Internal speed input (factory default for some models; verify on yours) |
 
 ## Installation
@@ -43,13 +43,13 @@ lmc = LinearMotorController("/dev/ttyUSB0")
 # Read amplifier info
 print(lmc.read_model_name())           # "MDDLN45SL"
 print(lmc.read_software_version())     # "Ver.1.016"
-print(lmc.read_feedback_pulse_position())  # current position in pulses
+print(lmc.read_position_mm())              # current position in mm
 
-# Move motor +5000 pulses from current position
-lmc.move_relative(5000, speed=10)
+# Move motor +40 mm from current position
+lmc.move_relative_mm(40.0, speed=100)
 
-# Move motor -5000 pulses (reverse)
-lmc.move_relative(-5000, speed=10)
+# Move motor -40 mm (reverse)
+lmc.move_relative_mm(-40.0, speed=100)
 ```
 
 ## API Reference
@@ -74,18 +74,33 @@ Read the amplifier software version (e.g., `"Ver.1.016"`).
 
 Read the current motor position as a signed integer in encoder pulse units. The value represents the absolute position from the power-on origin. Positive = forward, negative = reverse.
 
-### `read_input_signals() -> dict | None`
+### `read_position_mm() -> float | None`
 
-Read the logical input signal states. Return a dict:
+Read the current motor position in millimeters. Convert feedback pulses using `pulses_per_mm` (default 1000, based on 1 um magnetic encoder resolution).
 
-```python
-{
-    "servo_on": True,      # SRV-ON signal active
-    "alarm_clear": False,  # Alarm clear input
-    "n_ot": True,          # Negative overtravel (True = not triggered)
-    "p_ot": True,          # Positive overtravel (True = not triggered)
-}
-```
+### `move_relative_mm(distance_mm, speed=50, tolerance_mm=0.5, timeout=10.0) -> float | None`
+
+Move the motor by `distance_mm` millimeters from the current position. Convert mm to pulses internally and delegate to `move_relative()`.
+
+- `distance_mm` -- displacement in millimeters. Positive = forward, negative = reverse.
+- `speed` -- speed in r/min (1~500, direction is set automatically).
+- `tolerance_mm` -- acceptable position error in mm (default 0.5 mm).
+- `timeout` -- maximum wait time in seconds.
+
+Returns the final position in mm, or `None` on failure.
+
+### `move_to_mm(target_mm, tolerance_mm=0.1, max_iterations=5, timeout_per_step=10.0) -> float | None`
+
+Move to an **absolute target position** in millimeters using a software closed loop. Internally iterates `move_relative_mm()` with a descending speed schedule (50 → 10 → 3 → 1 r/min) so that speed-mode overshoot collapses into `tolerance_mm` (default ±0.1 mm).
+
+- `target_mm` -- absolute target position in mm (from power-on origin).
+- `tolerance_mm` -- acceptable position error in mm.
+- `max_iterations` -- correction attempts cap (default 5).
+- `timeout_per_step` -- per-move timeout in seconds.
+
+Returns the final position in mm, or `None` on failure. Returns early without motion if already within tolerance. Aborts if the residual error stops decreasing (convergence stalled).
+
+**Tuning speeds:** The iteration speeds are taken from the class attribute `move_to_mm_speed_schedule` (default `[50, 10, 3, 1, 1]` r/min). Edit this one list at the top of the class to change `move_to_mm` speeds project-wide; the first entry is the coarse approach speed and later entries shrink overshoot.
 
 ### `move_relative(pulse_offset, speed=50, tolerance=500, timeout=10.0) -> int | None`
 
@@ -100,9 +115,17 @@ Returns the final position, or `None` on failure.
 
 > **Note:** This uses speed control mode, not position control. There will be some overshoot after stopping due to deceleration. Lower speed values give better positioning accuracy.
 
+### Calibration
+
+The default `pulses_per_mm = 1000` assumes a 1 um/pulse magnetic linear encoder (Misumi E-RAM17-S). To calibrate on your hardware:
+
+1. Move a known number of pulses with `move_relative()`
+2. Measure the actual distance with a ruler
+3. Set `LinearMotorController.pulses_per_mm = pulse_delta / measured_mm`
+
 ## Communication Protocol
 
-This project uses the **MINAS standard serial protocol** (not Modbus). The protocol uses ENQ/EOT/ACK/NAK handshaking over RS485 half-duplex.
+This project uses the **MINAS standard serial protocol**. The protocol uses ENQ/EOT/ACK/NAK handshaking over RS485 half-duplex.
 
 ### Handshake Sequence
 
