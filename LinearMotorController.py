@@ -9,6 +9,15 @@ import time
 
 
 class LinearMotorController:
+    # Magnetic linear encoder: 1 um/pulse -> 1000 pulses/mm.
+    # Adjust after empirical calibration if needed.
+    pulses_per_mm = 1000
+
+    # Speed schedule (r/min) used by move_to_mm(). The first entry
+    # is the coarse approach speed; later entries shrink overshoot
+    # toward tolerance_mm. Edit here to change move_to_mm speeds.
+    move_to_mm_speed_schedule = [50, 10, 3, 1, 1]
+
     def __init__(self, port: str):
         """Initialize serial port with 8N1 MINAS standard settings."""
         self.ser = serial.Serial(
@@ -369,9 +378,11 @@ class LinearMotorController:
 
                 time.sleep(0.01)
 
-            self._write_parameter(3, 4, 0)
-
         finally:
+            # Always stop and release, even on exceptions or Ctrl+C,
+            # so a KeyboardInterrupt does not leave Pr3.04 commanding
+            # motion after the script exits.
+            self._write_parameter(3, 4, 0)
             self._release_execution_rights()
 
         time.sleep(2)
@@ -380,11 +391,153 @@ class LinearMotorController:
 
         return final
 
+    def read_position_mm(self) -> float | None:
+        """Read the current position in millimeters.
+
+        Convert the feedback pulse counter to mm using
+        the class-level pulses_per_mm ratio.
+
+        Return position in mm, or None on failure.
+        """
+        pulses = self.read_feedback_pulse_position()
+        if pulses is None:
+            return None
+        return pulses / self.pulses_per_mm
+
+    def move_relative_mm(
+        self,
+        distance_mm: float,
+        speed: int = 50,
+        tolerance_mm: float = 0.5,
+        timeout: float = 10.0,
+    ) -> float | None:
+        """Move the motor by distance_mm millimeters.
+
+        Convert mm to encoder pulses and delegate to
+        move_relative(). Use class-level pulses_per_mm
+        for the conversion.
+
+        Args:
+            distance_mm -- displacement in millimeters
+            speed -- motor speed in r/min (1~500,
+                sign auto-set)
+            tolerance_mm -- acceptable error in mm
+            timeout -- maximum wait time in seconds
+
+        Return the final position in mm, or None on
+        failure.
+        """
+        pulse_offset = round(distance_mm * self.pulses_per_mm)
+        tolerance_pulses = round(tolerance_mm * self.pulses_per_mm)
+        final_pulses = self.move_relative(
+            pulse_offset,
+            speed=speed,
+            tolerance=tolerance_pulses,
+            timeout=timeout,
+        )
+        if final_pulses is None:
+            return None
+        return final_pulses / self.pulses_per_mm
+
+    def move_to_mm(
+        self,
+        target_mm: float,
+        tolerance_mm: float = 0.1,
+        max_iterations: int = 5,
+        timeout_per_step: float = 10.0,
+    ) -> float | None:
+        """Move to an absolute target position in millimeters.
+
+        Implement a software closed loop on top of
+        move_relative_mm(): shrink the residual error by
+        iterating moves at progressively lower speeds so
+        speed-mode overshoot collapses into tolerance_mm.
+
+        Speeds come from the class attribute
+        ``move_to_mm_speed_schedule`` (default
+        [50, 10, 3, 1, 1] r/min). Edit that attribute to
+        retune speeds without changing call sites.
+
+        Abort early if the residual error stops decreasing
+        (convergence stalled) or max_iterations is reached.
+
+        Args:
+            target_mm -- absolute target position in mm
+            tolerance_mm -- acceptable |error| in mm
+            max_iterations -- correction attempts cap
+            timeout_per_step -- per-move timeout in seconds
+
+        Return the final position in mm, or None on failure.
+        """
+        min_pulse_step = 1
+
+        current_mm = self.read_position_mm()
+        if current_mm is None:
+            return None
+
+        error_mm = target_mm - current_mm
+        print(
+            f"move_to_mm: target={target_mm} mm,"
+            f" start={current_mm} mm, error={error_mm:+.3f} mm"
+        )
+        if abs(error_mm) <= tolerance_mm:
+            print("  Already within tolerance; no motion issued.")
+            return current_mm
+
+        prev_abs_error = abs(error_mm)
+        schedule = self.move_to_mm_speed_schedule
+        for i in range(min(max_iterations, len(schedule))):
+            speed = schedule[i]
+            pulse_step = abs(error_mm) * self.pulses_per_mm
+            if pulse_step < min_pulse_step:
+                print(
+                    f"  iter {i + 1}: residual {error_mm:+.4f} mm"
+                    f" < 1 pulse; stop."
+                )
+                break
+
+            print(f"  iter {i + 1}: move {error_mm:+.3f} mm @ speed {speed}")
+            result = self.move_relative_mm(
+                error_mm,
+                speed=speed,
+                tolerance_mm=tolerance_mm,
+                timeout=timeout_per_step,
+            )
+            if result is None:
+                print(f"  iter {i + 1}: move_relative_mm failed.")
+                return None
+
+            current_mm = self.read_position_mm()
+            if current_mm is None:
+                return None
+            error_mm = target_mm - current_mm
+            print(
+                f"  iter {i + 1}: now {current_mm} mm, error {error_mm:+.4f} mm"
+            )
+
+            if abs(error_mm) <= tolerance_mm:
+                print("  Converged within tolerance.")
+                return current_mm
+
+            if abs(error_mm) >= prev_abs_error:
+                print(
+                    "  Residual stopped decreasing; aborting"
+                    " to avoid oscillation."
+                )
+                return current_mm
+            prev_abs_error = abs(error_mm)
+
+        print(
+            f"  Did not converge within {max_iterations} iterations;"
+            f" residual {error_mm:+.4f} mm."
+        )
+        return current_mm
+
 
 def main():
     """Run a simple motor movement test scenario."""
     serial_port = "/dev/ttyUSB0"
-    test_pulse_offset = 40000
+    test_distance_mm = 40.0
     test_speed = 100
     test_iterations = 3
 
@@ -396,20 +549,20 @@ def main():
     version = lmc.read_software_version()
     print(f"Software version is {version}")
 
-    pulse_position = lmc.read_feedback_pulse_position()
-    print(f"Feedback pulse position is {pulse_position}")
+    position_mm = lmc.read_position_mm()
+    print(f"Current position is {position_mm} mm")
 
-    print("\n--- Motor move test ---")
+    print("\n--- Motor move test (mm) ---")
 
     for i in range(test_iterations):
-        print(f"Moving + {test_pulse_offset} pulses")
-        lmc.move_relative(test_pulse_offset, speed=test_speed)
+        print(f"Moving +{test_distance_mm} mm")
+        lmc.move_relative_mm(test_distance_mm, speed=test_speed)
 
-        print(f"Moving - {test_pulse_offset} pulses")
-        lmc.move_relative(-test_pulse_offset, speed=test_speed)
+        print(f"Moving -{test_distance_mm} mm")
+        lmc.move_relative_mm(-test_distance_mm, speed=test_speed)
 
-        final = lmc.read_feedback_pulse_position()
-        print(f"Final position: {final}")
+        final_mm = lmc.read_position_mm()
+        print(f"Final position: {final_mm} mm")
 
 
 if __name__ == "__main__":
