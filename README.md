@@ -74,19 +74,6 @@ Read the amplifier software version (e.g., `"Ver.1.016"`).
 
 Read the current motor position as a signed integer in encoder pulse units. The value represents the absolute position from the power-on origin. Positive = forward, negative = reverse.
 
-### `read_input_signals() -> dict | None`
-
-Read the logical input signal states. Return a dict:
-
-```python
-{
-    "servo_on": True,      # SRV-ON signal active
-    "alarm_clear": False,  # Alarm clear input
-    "n_ot": True,          # Negative overtravel (True = not triggered)
-    "p_ot": True,          # Positive overtravel (True = not triggered)
-}
-```
-
 ### `read_position_mm() -> float | None`
 
 Read the current motor position in millimeters. Convert feedback pulses using `pulses_per_mm` (default 1000, based on 1 um magnetic encoder resolution).
