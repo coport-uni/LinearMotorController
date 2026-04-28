@@ -10,7 +10,15 @@
       "Bash(curl -s -L --max-time 15 \"https://mitcommlab.mit.edu/cee/commkit/coding-and-comment-style/\")",
       "Bash(python3)",
       "WebFetch(domain:github.com)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(gh issue create --title 'MIT Code Convention audit and remove unused move_speed' --body ':*)",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('LinearMotorController.py', doraise=True\\)\")",
+      "Bash(gh issue create --title 'Add mm-based movement API and install cable carrier' --body ':*)",
+      "Bash(gh issue edit 2 --body ':*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(gh issue:*)",
+      "Bash(grep -c '\\\\\\\\`')"
     ]
   }
 }
