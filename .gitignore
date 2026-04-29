@@ -10,7 +10,10 @@ __pycache__/
 # IDE / editor
 .vscode/
 .idea/
-.claude/
+
+# Per-user Claude Code permissions (project-shared settings.json
+# and hooks/ are versioned)
+.claude/settings.local.json
 
 # OS
 .DS_Store

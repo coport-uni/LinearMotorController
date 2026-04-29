@@ -183,3 +183,112 @@ mode); operator picks via Pr5.37 + power cycle.
 - [x] Extend language rule to cover GitHub issues and PRs
 - [x] Verify motor runs correctly
 - [x] Commit and push
+
+---
+
+## Task 9: Repo-wide MIT Convention Cleanup and Modbus Removal
+
+**Date**: 2026-04-29
+**GitHub Issue**: #6
+
+### Purpose
+
+After Tasks 6, 7, and 8 added closed-loop control and a Modbus path,
+the repo has accumulated minor MIT Convention drift (shadowed builtin
+`self.id`, magic numbers in the serial handshake, inconsistent
+variable naming, missing class docstring). At the same time, the
+project is committing to MINAS standard protocol only, so all Modbus
+artifacts should be removed.
+
+Internal-method `_` prefix naming was audited and is already
+consistent, so it is **not** in scope.
+
+### Scope A — `LinearMotorController.py` style cleanup (no behavior change)
+
+- [ ] Add a docstring to the `LinearMotorController` class
+- [ ] Rename `self.id` → `self.axis_id` (avoid shadowing builtin `id()`)
+- [ ] Move `ENQ/EOT/ACK/NAK` from instance attrs to class-level
+      lowercase constants (`_enq/_eot/_ack/_nak`) per CLAUDE.md §1
+- [ ] Extract magic numbers to class-level constants
+      (`_serial_timeout_s = 2`, `_response_timeout_s = 2`,
+      `_no_response_error = 0xFF`)
+- [ ] Replace `0x80` literal at L130 with the existing `module_byte`
+      computation for consistency with L75
+- [ ] Fix " No EOT response from amplifier." leading-space typo (L91)
+- [ ] Standardize timing variable name to `start_time`
+      (currently mixes `start` and `start_time`)
+- [ ] Add explicit parentheses to `(sum(response) & 0xFF) != 0` (L154)
+
+### Scope B — Whole-repo MIT Convention audit
+
+Audit and fix the same class of issues (naming, magic numbers,
+docstrings, 80-col, comments) in the rest of the repo:
+
+- [ ] `claude_test/test_connection.py`
+- [ ] `claude_test/diagnose_amp_state.py`
+- [ ] `claude_test/measure_accuracy.py`
+- [ ] `claude_test/move_to_mm.py`
+- [ ] `README.md` — verify examples still match the cleaned-up API
+      (`axis_id`, removed Modbus class)
+- [ ] `claude_test/README.md` — drop rows for any deleted scripts
+
+### Scope C — Remove all Modbus content
+
+The project is committing to MINAS standard protocol only. Remove:
+
+- [ ] Delete `LinearMotorControllerModbus.py`
+- [ ] Delete `Modbus_reference.pdf`
+- [ ] Delete `MinasA6_driver_main.pdf` (per CLAUDE.md L334 this is
+      the Modbus spec PDF; user to confirm before deletion in case
+      it is still desired as reference)
+- [ ] Delete `claude_test/check_input_signals.py`
+      (built specifically for Task 8 stage 1 Modbus feasibility)
+- [ ] Edit `CLAUDE.md` Reference Documents section: remove Modbus
+      PDF rows (L334, L336)
+- [ ] Edit `CLAUDE.md` L7: drop the "not Modbus" parenthetical since
+      Modbus is no longer part of the project
+- [ ] Mark Task 8 above as cancelled with reason "Modbus path
+      dropped; project committed to MINAS standard protocol only."
+- [ ] Confirm `LinearMotorController.py` and remaining `claude_test/`
+      scripts have no Modbus imports/strings left
+
+### Verification
+
+- [ ] `ruff check` and `ruff format --check` clean across the repo
+- [ ] `python3 LinearMotorController.py` runs the same demo on
+      hardware (read model / version / position, then move)
+- [ ] `git grep -i modbus` returns nothing except historical
+      references in this Task 9 / Issue #6
+- [ ] Commit and push
+
+---
+
+## Task 10: Sync Repo Conventions and Hooks from CommonClaude
+
+**Date**: 2026-04-28
+**Source**: https://github.com/coport-uni/CommonClaude
+**GitHub Issue**: #7
+
+### Purpose
+
+Bring the full CommonClaude convention set (CLAUDE.md sections
+1–10 plus all enforcement hooks) into this project, while preserving
+the project-specific sections (MINAS protocol, hardware setup,
+reference PDFs).
+
+### Checklist
+
+- [x] Merge CLAUDE.md: keep project-specific preamble; replace
+      convention block with CommonClaude §1–§10
+- [x] Update `.claude/settings.json` with env vars and four hook
+      event handlers
+- [x] Create `.claude/hooks/` with five executable shell scripts
+  - [x] `pre-write-guard.sh`
+  - [x] `pre-bash-secret-scan.sh`
+  - [x] `pre-read-env-guard.sh`
+  - [x] `post-write-lint.sh`
+  - [x] `post-write-debug-remind.sh`
+- [x] Expand `ruff.toml` to full CommonClaude config
+- [x] Bootstrap `LearnedPatterns.md` per §10 from Tasks 1–9
+- [x] `gh issue create` for this task (#7)
+- [ ] Commit and push
