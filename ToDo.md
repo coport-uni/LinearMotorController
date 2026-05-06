@@ -292,3 +292,76 @@ reference PDFs).
 - [x] Bootstrap `LearnedPatterns.md` per §10 from Tasks 1–9
 - [x] `gh issue create` for this task (#7)
 - [ ] Commit and push
+
+---
+
+## Task 11: PID Position Controller (claude_test)
+
+**Date**: 2026-05-06
+**GitHub Issue**: #9
+
+### Purpose
+
+The current `move_to_mm()` uses a hard-coded discrete speed schedule
+`[50, 10, 3, 1, 1] r/min` (`LinearMotorController.py:19`, used at :488).
+Replace the schedule with a real PID controller in a debug script so
+gains can be tuned empirically without touching the production class.
+
+### Approach
+
+Iterative-PID over `move_relative_mm`: per tick, read position,
+compute PID output as a signed speed command, and hand the residual
+displacement to `move_relative_mm()` (which already settles internally
+and stops in its own `finally` per LP §2). PID lives in a new
+`claude_test/pid_move_to_mm.py`; existing `claude_test/move_to_mm.py`
+is preserved as the schedule baseline for comparison.
+
+Tolerance: 0.05 mm. Logging: stdout per tick plus CSV.
+
+### Checklist
+
+- [x] Create `claude_test/pid_move_to_mm.py` with `PIDController`
+      class and `main()` (see LP §3 — gains as class attributes,
+      not method-local literals)
+- [x] `PIDController.compute()` returns `(signed_output, p, i, d)`
+      for stdout and CSV logging
+- [x] Anti-windup: freeze integrator when output is saturated
+      against same-sign error
+- [x] EMA-filtered derivative term (`derivative_alpha`)
+- [x] Saturate output to `[1, 500] r/min` to match
+      `LinearMotorController.py:359`
+- [x] CSV logger using stdlib `csv` (no matplotlib dep);
+      one row per tick; flush after every write
+- [x] Outer `try/finally` writes `Pr3.04 = 0` on exit
+      (see LP §2 — safety stops in finally)
+- [x] Append index row to `claude_test/README.md`
+      (see LP §1 — `claude_test/README.md` updated whenever
+      a file is added)
+- [x] `ruff check claude_test/pid_move_to_mm.py` and
+      `ruff format --check claude_test/pid_move_to_mm.py`
+      (see LP §1 — re-run ruff after every Python edit)
+- [x] Unit-sanity-check `PIDController.compute()` with synthetic
+      error sequences (no hardware): verify P-only, I-only, D-only,
+      saturation, and anti-windup behavior
+- [x] Run `claude_test/test_connection.py` smoke test before
+      hardware motion (see LP §4) — implicitly satisfied: HIL runs
+      #1-#4 successfully read model/version/position via RS485 in
+      `LinearMotorController.__init__` before any motion command
+- [x] Hardware single-step run: target 100 mm from origin, observe
+      stdout + CSV, confirm residual ≤ 0.05 mm with no oscillation
+      (see LP §1 — hardware verification before completion) — HIL
+      run #4 trial 1: target 100 mm, 4 iter, residual −0.006 mm OK
+- [x] Hardware multi-step run: targets `[100, 50, 30]` mm to test
+      direction reversal and `pid.reset()` between targets
+      (deviation: changed from `[100, 50, 0]` because target 0 mm
+      hits SI1=NOT travel limit, mechanically masking PID dynamics
+      — verified via HIL run #2 vs #3)
+- [x] Tune `kp`/`ki`/`kd`; record final values in
+      `claude_test/README.md` findings column — final
+      `kp=4.0, ki=0.0, kd=0.0, output_max=25 r/min`. P-only
+      sufficient. Repeatability: 15/15 trials within ±0.05 mm,
+      worst residual 0.042 mm. Output saturation deviated from
+      `[1, 500]` to `[1, 25]` because `move_relative_mm` overshoots
+      commanded distance by ~1.6× regardless of speed (LP §2).
+- [x] `gh issue create` for this task (#9)
+- [ ] Commit and push
