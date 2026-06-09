@@ -292,3 +292,40 @@ reference PDFs).
 - [x] Bootstrap `LearnedPatterns.md` per §10 from Tasks 1–9
 - [x] `gh issue create` for this task (#7)
 - [ ] Commit and push
+
+---
+
+## Task 11: Re-sync CLAUDE.md with Latest CommonClaude Conventions
+
+**Date**: 2026-06-09
+**Source**: https://github.com/coport-uni/CommonClaude (commit e1fa139)
+
+### Purpose
+
+Upstream CommonClaude grew from §1–§10 to §1–§17 since the Task 10
+sync. Bring the new sections into this project's CLAUDE.md while
+preserving the project-specific preamble (MINAS protocol, hardware
+setup) and Python/ruff.toml adaptations (see LP §4 "Convention rules
+apply to docs as well as code").
+
+### Checklist
+
+- [x] Merge CLAUDE.md: keep project preamble; adopt upstream §1–§17
+  - [x] §4 Task Management: new branch + PR workflow steps
+  - [x] §7 Research Before Coding & MCP Servers (Serena, Context7,
+        Fetch) — new mandatory-MCP section
+  - [x] §11 Commit Messages (Conventional Commits) — new
+  - [x] §12 Branching Strategy (GitHub Flow, prefer `gh` CLI) — new
+  - [x] §13 .gitignore template — new
+  - [x] §14 Versioning (SemVer) — new
+  - [x] §15 Pull Request Guidelines — new
+  - [x] §16 Git Automation (pre-commit) — new
+  - [x] §17 References (Git Convention) — new
+  - [x] Keep Python examples in §3/§5 and `ruff.toml` in §6
+        (upstream §5 still shows C examples; this is a Python repo)
+- [x] Update Reference Documents section to the renamed PDF
+      filenames (`MinasA6_driver_main.pdf`, `MinasA6_driver_sub.pdf`,
+      `Modbus_reference.pdf`)
+- [x] Refresh `CommonCLAUDE.md` snapshot to upstream e1fa139
+- [x] `gh issue create` for this task (#12)
+- [ ] Commit and push
