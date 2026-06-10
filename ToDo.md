@@ -354,4 +354,4 @@ feedback pulse counter.
 - [x] Move -5 mm back to start and confirm encoder delta
 - [x] Report measured positions and residual errors
 - [x] `gh issue create` for this task (#14)
-- [ ] Commit and push
+- [x] Commit and push (0e70ca1)
