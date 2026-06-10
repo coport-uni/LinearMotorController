@@ -381,4 +381,4 @@ Task 12 found the amp on `/dev/ttyUSB3` after USB re-enumeration
 - [x] Run the demo on hardware and confirm encoder motion
       (see LP §1)
 - [x] `gh issue create` for this task (#15)
-- [ ] Commit, push, and open PR to `main`
+- [x] Commit, push, and open PR to `main` (6b5e29d, PR #13)
