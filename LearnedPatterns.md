@@ -116,6 +116,13 @@
 - **Rule**: Always reuse `pulses_per_mm` for unit conversion; never inline `* 1000` or `/ 1000`.
 (from ToDo#2)
 
+### `/dev/ttyUSB*` numbering is not stable across USB re-enumeration
+- **Problem**: The smoke test failed with "No EOT response" on the documented `/dev/ttyUSB0` even though the amp was powered and wired.
+- **Cause**: USB replug/re-enumeration reordered the serial ports; the RS485 converter (now enumerating as FTDI, with several other FTDI devices present) landed on `/dev/ttyUSB3`.
+- **Fix**: `claude_test/probe_ports.py` probes every `/dev/ttyUSB*` with a MINAS model-name read and reports which port answers.
+- **Rule**: Always run `probe_ports.py` to locate the amp when the smoke test reports "No EOT response"; never assume `/dev/ttyUSB0`.
+(from ToDo#12)
+
 ### Cable carrier and `pulses_per_mm` calibration are still pending hardware tasks
 - **Problem**: Two ToDo#2 items — installing the cable carrier (케이블캐리어) and calibrating `pulses_per_mm` against a ruler — remain unchecked.
 - **Cause**: Both require physical access to the rail and were deferred when prior tasks took priority.

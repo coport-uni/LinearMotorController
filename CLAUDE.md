@@ -18,7 +18,10 @@ This project runs inside a **Docker container** with [Claude Code](https://claud
 
 ## Hardware Setup
 
-- **RS485 converter**: TI USB 3410 at `/dev/ttyUSB0`
+- **RS485 converter**: FTDI at `/dev/ttyUSB3` as of 2026-06-10.
+  Port numbering is not stable across USB re-enumeration; run
+  `claude_test/probe_ports.py` to locate the amp when it does not
+  answer.
 - **Amplifier**: MDDLN45SL (confirmed via RS485 read)
 - **Serial settings**: 9600 bps, 8N1 (no parity, 1 stop bit)
 - **Amp parameters**: Pr5.37=0 (MINAS standard protocol), Pr5.30=2 (9600bps), Pr5.31=1 (slave ID)
@@ -65,16 +68,16 @@ All code follows the [MIT CommLab Coding and Comment Style](https://mitcommlab.m
 - **Variables and classes** are nouns; **functions and methods** are verbs.
 - Names must be pronounceable and straightforward.
 - Name length is proportional to scope: short for local, descriptive for broad.
-- Avoid abbreviations unless self-explanatory. If unavoidable, define them in a comment block.
+- Avoid abbreviations unless self-explanatory. If unavoidable, define them in a comment.
 - Python conventions:
 
-| Element    | Style        | Example               |
-|------------|--------------|-----------------------|
-| Variable   | `lower_case` | `joint_angle`         |
-| Function   | `lower_case` | `send_action`         |
-| Class      | `CamelCase`  | `FairinoFollower`     |
-| Constant   | `lower_case` | `_settle_mid_s`       |
-| Module     | `lowercase`  | `fairino_follower`    |
+| Element  | Style        | Example            |
+|----------|--------------|--------------------|
+| Variable | `lower_case` | `joint_angle`      |
+| Function | `lower_case` | `send_action`      |
+| Class    | `CamelCase`  | `RobotState`       |
+| Constant | `lower_case` | `settle_mid_ms`    |
+| Module   | `lowercase`  | `robot_state`      |
 
 ### Structure
 
@@ -83,13 +86,6 @@ All code follows the [MIT CommLab Coding and Comment Style](https://mitcommlab.m
 - Indent with **4 spaces** (never tabs).
 - Place operators on the **left side** of continuation lines so the reader can see at a glance that a line continues.
 - Group related items visually with alignment.
-- Use refactoring-invariant alignment for long argument lists:
-  ```python
-  result = some_function(
-      argument_one,
-      argument_two,
-      argument_three)
-  ```
 
 ### Spacing
 
@@ -105,7 +101,7 @@ All code follows the [MIT CommLab Coding and Comment Style](https://mitcommlab.m
 - TODO format:
   ```python
   # TODO: (@owner) Implement 2-step predictor-corrector
-  # for stability. Adams-Bashforth causes shocks.
+  # for stability -- Adams-Bashforth causes shocks.
   ```
 
 ### Language
@@ -114,24 +110,31 @@ All code follows the [MIT CommLab Coding and Comment Style](https://mitcommlab.m
 
 ### Documentation
 
-- All public functions and classes must have **docstrings** (PEP 257 / Google style).
-- Use `"""triple double quotes"""`.
+- All public functions and classes must have **docstrings** following [PEP 257](https://peps.python.org/pep-0257/) (Google style recommended).
 - A docstring states **what** and **why**, not **how**.
-- Write as imperative: `"""Return the pathname."""` not `"""Returns the pathname."""`
-- Do not restate the function signature in the docstring.
 - Include `Args:`, `Returns:`, and `Raises:` sections when applicable.
-- Multi-line docstrings: summary line, blank line, then details. Closing `"""` on its own line.
-  ```python
-  def compute_velocity(distance, time):
-      """Compute velocity from distance and time.
 
-      Args:
-          distance -- travel distance in meters
-          time -- elapsed time in seconds
+Example:
+```python
+def send_action(joint_pos: list[float]) -> dict:
+    """Stream a servo joint command to the robot.
 
-      Return velocity in m/s. Raise ValueError if time is zero.
-      """
-  ```
+    The command is non-blocking and returns once the controller
+    acknowledges receipt -- it does not wait for motion to finish.
+
+    Args:
+        joint_pos: Six target joint angles in degrees, ordered
+            from base (J1) to flange (J6).
+
+    Returns:
+        Controller acknowledgement payload with keys
+        ``"errcode"`` and ``"timestamp"``.
+
+    Raises:
+        ConnectionError: If the controller socket has dropped.
+        ValueError: If ``joint_pos`` is not exactly six values.
+    """
+```
 
 ---
 
@@ -186,11 +189,14 @@ Before writing ToDo.md, the following two checks must be performed:
 2. Once validated, organize the task list in `ToDo.md`.
 3. Get the user's confirmation on the `ToDo.md` contents.
 4. Once confirmed, create a GitHub issue via `gh issue create`.
-5. Check off completed items in `ToDo.md` as work progresses.
-6. Update the GitHub issue via `gh issue edit` for completed items.
-7. **Commit and push** changes after every user command is completed.
+5. Cut a working branch from `main` using `<type>/<short-description>` naming (see §12.2).
+6. Check off completed items in `ToDo.md` as work progresses; every commit follows the Conventional Commits format (see §11).
+7. Update the GitHub issue via `gh issue edit` for completed items.
+8. Push the branch to remote.
+9. After work is complete, open a PR via `gh pr create` using the template in §15.2.
+10. After the PR is merged, delete the local branch.
 
-> **Reminder**: Steps 2 (`ToDo.md`) and 4 (`gh issue create`) are **non-negotiable**. Every task must have a corresponding `ToDo.md` entry and a GitHub issue before any work begins.
+> **Reminder**: Steps 2 (`ToDo.md`), 4 (`gh issue create`), 5 (working branch), and 9 (PR) are **non-negotiable** for any task that touches code or documentation. Every task must have a corresponding `ToDo.md` entry, a GitHub issue, a dedicated branch, and a PR.
 
 ---
 
@@ -234,7 +240,7 @@ Tests exist to verify the **correctness and quality** of code. Code quality must
 
 ## 6. Linting
 
-All Python code must pass **Ruff** checks before committing.
+All Python code must pass **Ruff** (linter and formatter) before committing.
 
 ### Rules
 
@@ -244,19 +250,50 @@ All Python code must pass **Ruff** checks before committing.
    ruff check <file>.py
    ruff format --check <file>.py
    ```
-3. **Fix before committing**: If either command reports errors, fix them before proceeding. Use `ruff format <file>.py` to auto-format.
+3. **Fix before committing**: If either command reports errors, fix them before proceeding. Use `ruff check --fix <file>.py` and `ruff format <file>.py` to auto-format.
 
 ---
 
-## 7. Research Before Coding
+## 7. Research Before Coding & MCP Servers
 
-Before calling into an unfamiliar library, API, or CLI, verify its actual interface rather than guessing from memory.
+Before calling into an unfamiliar library, API, or CLI, verify its actual interface rather than guessing from memory. Three MCP servers are **mandatory** tools for this workflow: **Serena** for semantic code navigation, **Context7** for up-to-date library documentation, and **Fetch** for pulling in reference material from the web.
 
-### Rules
+### 7.1 Required MCP Servers
 
-1. **Consult official documentation first** via Context7 MCP or web search.
-2. **Search the repository** for prior implementations before writing new code against the same interface.
-3. **Trust documentation over intuition**: when the docs disagree with the mental model, update the mental model.
+| MCP server | Purpose | When to use |
+|------------|---------|-------------|
+| **Serena** | Semantic, symbol-level code retrieval and editing (LSP-backed). | Exploring the codebase, locating symbols/definitions/references, and making precise edits — **before** falling back to plain text search or full-file reads. |
+| **Context7** | Fetches current, version-accurate documentation for libraries, frameworks, and APIs. | Before writing or changing any code that calls an external library, framework, or API. |
+| **Fetch** | Retrieves a web page and returns its content as Markdown. | Reviewing reference materials (spec pages, articles, docs not covered by Context7) cited in a task — see §4 Command Input Validation. |
+
+### 7.2 Rules
+
+1. **Use Serena for code understanding and edits**: Prefer Serena's symbol-level tools (find symbol, find references, navigate definitions, targeted symbol edits) over raw text search or rewriting whole files. This keeps context focused and edits precise.
+2. **Consult official documentation first via Context7**: When touching an unfamiliar or version-sensitive library/API, query Context7 for its current interface before coding.
+3. **Pull reference material with Fetch**: When a task cites a URL, spec, or article (§4), use Fetch to read it as Markdown before incorporating it. Fall back to plain web search only when neither Context7 nor Fetch yields the source.
+4. **Search the repository** for prior implementations (via Serena) before writing new code against the same interface.
+5. **Trust documentation over intuition**: when the docs disagree with the mental model, update the mental model.
+
+### 7.3 Setup
+
+Both servers are registered with Claude Code via `claude mcp add`. Example configuration:
+
+```bash
+# Serena — semantic code toolkit (run from the project root)
+claude mcp add serena -- \
+  uvx --from git+https://github.com/oraios/serena \
+  serena start-mcp-server --context ide-assistant --project "$(pwd)"
+
+# Context7 — up-to-date library documentation
+claude mcp add context7 -- npx -y @upstash/context7-mcp
+
+# Fetch — retrieve web pages as Markdown
+claude mcp add fetch -- uvx mcp-server-fetch
+```
+
+Verify all three are connected with `claude mcp list` (or `/mcp` inside a session) before relying on them.
+
+> **Sources**: [Serena](https://github.com/oraios/serena) · [Context7](https://github.com/upstash/context7) · [Fetch](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch)
 
 ---
 
@@ -329,8 +366,337 @@ If `LearnedPatterns.md` does not exist in the repository root, generate it by an
 
 ---
 
+## 11. Commit Messages
+
+Follow the **Conventional Commits** specification. The English-only rule for commit messages, PR titles, and PR bodies follows §2 Language.
+
+### 11.1 Format
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer]
+```
+
+### 11.2 Types
+
+| Type | Purpose |
+|---|---|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `refactor` | Code restructuring without behavior change |
+| `docs` | Documentation only |
+| `test` | Adding or modifying tests |
+| `chore` | Build config, .gitignore, etc. |
+| `style` | Formatting only (no behavior change) |
+| `perf` | Performance improvement |
+
+### 11.3 Rules
+
+- Description in **imperative mood**: "Add", "Fix" (NOT "Added", "Fixed")
+- Subject line **under 50 characters**
+- **No period** at the end of the subject line
+- Wrap body at 72 characters
+- Body explains **"what and why"** (the code shows "how")
+- Keep scope short and focused on the affected area (e.g., `parser`, `core`, `build`)
+
+### 11.4 Examples
+
+```
+feat(parser): add JSON config loader
+
+Adds JSON format support alongside the existing INI files.
+Uses only the Python standard library — no external dependencies.
+```
+
+```
+fix(core): prevent off-by-one in tokenize()
+```
+
+```
+chore(build): update pyproject.toml for new module
+```
+
+### 11.5 Breaking Changes
+
+Mark backward-incompatible changes with `!` or a footer:
+
+```
+feat(api)!: change return type of parse() to dict
+
+BREAKING CHANGE: parse() previously returned a tuple;
+it now returns a dict.
+```
+
+> **Source**: [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)
+
+---
+
+## 12. Branching Strategy
+
+Adopt **GitHub Flow** — a lightweight single-main-branch strategy.
+
+### 12.1 Principles
+
+- `main` is **always in a deployable state**
+- Work happens on **separate branches** cut from `main`
+- Changes are merged into `main` via **Pull Requests**
+- **Delete branches after merging**
+- **Open PRs even when working solo** (for self-review and history tracking)
+- **Prefer the `gh` CLI over raw `git` whenever possible.** Use `gh` for any GitHub-side operation (issues, PRs, reviews, releases, repo inspection — e.g. `gh issue create`, `gh pr create`, `gh pr merge`, `gh release create`). Reserve plain `git` for local version control that `gh` does not cover (staging, commits, local branches). This keeps the workflow consistent with §4 Task Management, which already drives issues and PRs through `gh`.
+
+### 12.2 Branch Naming
+
+```
+<type>/<short-description>
+```
+
+Examples:
+- `feature/csv-parser`
+- `feature/python-bindings`
+- `fix/memory-leak-in-loader`
+- `fix/issue-42`
+- `refactor/error-handling`
+- `docs/api-reference`
+
+### 12.3 Standard Workflow
+
+```bash
+# 1. Get latest main
+git checkout main
+git pull origin main
+
+# 2. Create a working branch
+git checkout -b feature/csv-parser
+
+# 3. Work and commit
+git add .
+git commit -m "feat(parser): add CSV reader"
+
+# 4. Push to remote
+git push origin feature/csv-parser
+
+# 5. Open a PR on GitHub → review → merge
+
+# 6. Clean up locally after merge
+git checkout main
+git pull origin main
+git branch -d feature/csv-parser
+```
+
+> **Source**: [GitHub Flow Documentation](https://docs.github.com/en/get-started/using-github/github-flow)
+
+---
+
+## 13. .gitignore
+
+Cover Python build/cache artifacts plus standard editor and OS files. Use GitHub's official Python template as a base.
+
+### 13.1 Base Template
+
+```gitignore
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ===== Virtual environments =====
+.venv/
+venv/
+env/
+
+# ===== Editor / OS =====
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===== Secrets =====
+.env
+.env.local
+*.key
+*.pem
+```
+
+### 13.2 Global .gitignore
+
+Keep OS/editor-specific files in a personal `~/.gitignore_global`:
+
+```bash
+git config --global core.excludesfile ~/.gitignore_global
+```
+
+> **Source**: [GitHub Official .gitignore Template (Python)](https://github.com/github/gitignore/blob/main/Python.gitignore)
+
+---
+
+## 14. Versioning
+
+Follow **Semantic Versioning (SemVer)**.
+
+### 14.1 Format
+
+```
+MAJOR.MINOR.PATCH
+```
+
+| Component | When to increment |
+|---|---|
+| **MAJOR** | Backward-incompatible changes |
+| **MINOR** | Backward-compatible new features |
+| **PATCH** | Backward-compatible bug fixes |
+
+### 14.2 Mapping to Conventional Commits
+
+- `fix:` → **PATCH** bump
+- `feat:` → **MINOR** bump
+- `BREAKING CHANGE` → **MAJOR** bump
+
+### 14.3 Tagging
+
+```bash
+# Create an annotated tag (recommended)
+git tag -a v0.1.0 -m "Initial release"
+
+# Push the tag
+git push origin v0.1.0
+
+# Push all tags
+git push origin --tags
+```
+
+### 14.4 Initial Development
+
+- `0.y.z` is for initial development — the public API is considered unstable
+- The first stable release should be `1.0.0`
+
+> **Source**: [Semantic Versioning 2.0.0](https://semver.org/)
+
+---
+
+## 15. Pull Request Guidelines
+
+### 15.1 Title
+
+Use the same Conventional Commits format as commit messages:
+
+```
+feat(parser): add JSON config loader
+```
+
+### 15.2 Description Template
+
+```markdown
+## Changes
+- Brief summary of what changed
+
+## Why
+- Motivation behind the change
+
+## Testing
+- How the change was verified (added tests, manual testing, etc.)
+
+## Related Issues
+Closes #42
+```
+
+### 15.3 Size
+
+- Keep PRs **under 400 lines** when possible (for effective review)
+- Split large changes into multiple PRs
+
+---
+
+## 16. Git Automation (Optional)
+
+Use **pre-commit** for automated style checks and formatting.
+
+### 16.1 Installation
+
+```bash
+pip install pre-commit
+```
+
+### 16.2 Example `.pre-commit-config.yaml`
+
+```yaml
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  # Python
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+```
+
+### 16.3 Enable Hooks
+
+```bash
+pre-commit install
+```
+
+Checks and formatting will now run automatically on `git commit`.
+
+> **Source**: [pre-commit Documentation](https://pre-commit.com/)
+
+---
+
+## 17. References (Git Convention)
+
+### Primary Sources (Specifications / Official Docs)
+
+| Item | URL |
+|---|---|
+| Conventional Commits | https://www.conventionalcommits.org/ |
+| GitHub Flow | https://docs.github.com/en/get-started/using-github/github-flow |
+| Semantic Versioning | https://semver.org/ |
+| GitHub .gitignore Templates | https://github.com/github/gitignore |
+| pre-commit | https://pre-commit.com/ |
+
+### Learning Resources
+
+| Resource | URL |
+|---|---|
+| Pro Git (free book) | https://git-scm.com/book/en/v2 |
+| MIT Missing Semester — Version Control | https://missing.csail.mit.edu/2020/version-control/ |
+| Oh Shit, Git!?! (recovery guide) | https://ohshitgit.com/ |
+| Learn Git Branching (interactive) | https://learngitbranching.js.org/ |
+
+### Commit Message Writing Guides
+
+| Resource | URL |
+|---|---|
+| Tim Pope, "A Note About Git Commit Messages" | https://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html |
+| Chris Beams, "How to Write a Git Commit Message" | https://cbea.ms/git-commit/ |
+
+---
+
 ## Reference Documents (PDFs in repo)
 
-- `MinasA6_드라이버.pdf` — Modbus통신사양·Block동작기능편 (SX-DSV03384). Register addresses for Modbus mode.
-- `MinasA6_드라이버_참고.pdf` — 취급설명서(종합편). Contains MINAS standard protocol spec (P.7-28~7-41), command details, parameter list, wiring diagrams.
-- `Modbus_참조.pdf` — Additional Modbus reference.
+- `MinasA6_driver_main.pdf` — Modbus통신사양·Block동작기능편 (SX-DSV03384). Register addresses for Modbus mode.
+- `MinasA6_driver_sub.pdf` — 취급설명서(종합편). Contains MINAS standard protocol spec (P.7-28~7-41), command details, parameter list, wiring diagrams.
+- `Modbus_reference.pdf` — Additional Modbus reference.

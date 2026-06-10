@@ -4,8 +4,10 @@ Communicate using the MINAS standard serial protocol
 (ENQ/EOT/ACK/NAK handshaking) at 9600 bps, 8N1.
 """
 
-import serial
+import sys
 import time
+
+import serial
 
 
 class LinearMotorController:
@@ -535,8 +537,15 @@ class LinearMotorController:
 
 
 def main():
-    """Run a simple motor movement test scenario."""
-    serial_port = "/dev/ttyUSB0"
+    """Run a simple motor movement test scenario.
+
+    Use the serial port given as the first CLI argument, or fall
+    back to the default below. Port numbering changes across USB
+    re-enumeration; run claude_test/probe_ports.py to locate the
+    amp when the default port does not answer.
+    """
+    default_serial_port = "/dev/ttyUSB3"
+    serial_port = sys.argv[1] if len(sys.argv) > 1 else default_serial_port
     test_distance_mm = 40.0
     test_speed = 100
     test_iterations = 3
