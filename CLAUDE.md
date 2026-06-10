@@ -18,7 +18,10 @@ This project runs inside a **Docker container** with [Claude Code](https://claud
 
 ## Hardware Setup
 
-- **RS485 converter**: TI USB 3410 at `/dev/ttyUSB0`
+- **RS485 converter**: FTDI at `/dev/ttyUSB3` as of 2026-06-10.
+  Port numbering is not stable across USB re-enumeration; run
+  `claude_test/probe_ports.py` to locate the amp when it does not
+  answer.
 - **Amplifier**: MDDLN45SL (confirmed via RS485 read)
 - **Serial settings**: 9600 bps, 8N1 (no parity, 1 stop bit)
 - **Amp parameters**: Pr5.37=0 (MINAS standard protocol), Pr5.30=2 (9600bps), Pr5.31=1 (slave ID)

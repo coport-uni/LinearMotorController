@@ -355,3 +355,30 @@ feedback pulse counter.
 - [x] Report measured positions and residual errors
 - [x] `gh issue create` for this task (#14)
 - [x] Commit and push (0e70ca1)
+
+---
+
+## Task 13: Point main() and Docs at the Current Serial Port
+
+**Date**: 2026-06-10
+
+### Purpose
+
+Task 12 found the amp on `/dev/ttyUSB3` after USB re-enumeration
+(see LP §5 "`/dev/ttyUSB*` numbering is not stable"). Update the
+`main()` demo default and the port mentions in `README.md` and
+`CLAUDE.md`, allow a CLI override, then open a PR to `main`.
+
+### Checklist
+
+- [x] `main()`: default port `/dev/ttyUSB3`, accept `argv[1]`
+      override (see LP §5)
+- [x] Update `README.md` examples to the current port
+      (see LP §1 — README and API change in the same task)
+- [x] Update `CLAUDE.md` Hardware Setup row (FTDI converter,
+      unstable port numbering)
+- [x] Ruff check and format (see LP §1)
+- [x] Run the demo on hardware and confirm encoder motion
+      (see LP §1)
+- [x] `gh issue create` for this task (#15)
+- [ ] Commit, push, and open PR to `main`

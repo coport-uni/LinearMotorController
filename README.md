@@ -38,7 +38,9 @@ pip3 install pyserial
 ```python
 from LinearMotorController import LinearMotorController
 
-lmc = LinearMotorController("/dev/ttyUSB0")
+# Port numbering changes across USB re-enumeration. If the amp
+# does not answer, run claude_test/probe_ports.py to locate it.
+lmc = LinearMotorController("/dev/ttyUSB3")
 
 # Read amplifier info
 print(lmc.read_model_name())           # "MDDLN45SL"
@@ -59,7 +61,7 @@ lmc.move_relative_mm(-40.0, speed=100)
 Create a controller instance. Opens the serial port with 9600 bps, 8N1.
 
 ```python
-lmc = LinearMotorController("/dev/ttyUSB0")
+lmc = LinearMotorController("/dev/ttyUSB3")
 ```
 
 ### `read_model_name() -> str | None`
