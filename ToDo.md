@@ -329,3 +329,29 @@ apply to docs as well as code").
 - [x] Refresh `CommonCLAUDE.md` snapshot to upstream e1fa139
 - [x] `gh issue create` for this task (#12)
 - [ ] Commit and push
+
+---
+
+## Task 12: Hardware Verification — ±5 mm Rail Motion Test
+
+**Date**: 2026-06-10
+
+### Purpose
+
+Verify that `LinearMotorController.py` works on the currently
+attached hardware by moving the rail forward and backward 5 mm
+and confirming actual displacement through the motor encoder
+feedback pulse counter.
+
+### Checklist
+
+- [x] Run RS485 smoke test (model, version, position) before any
+      motion command (see LP §4)
+- [x] Write `claude_test/verify_5mm_motion.py` debug script and
+      register it in `claude_test/README.md` (see LP §1)
+- [x] Move +5 mm via `move_to_mm()` and confirm encoder delta
+      (see LP §2 — never raw `move_relative_mm()` for accuracy)
+- [x] Move -5 mm back to start and confirm encoder delta
+- [x] Report measured positions and residual errors
+- [x] `gh issue create` for this task (#14)
+- [ ] Commit and push
