@@ -382,3 +382,58 @@ Task 12 found the amp on `/dev/ttyUSB3` after USB re-enumeration
       (see LP §1)
 - [x] `gh issue create` for this task (#15)
 - [x] Commit, push, and open PR to `main` (6b5e29d, PR #13)
+
+---
+
+## Task 14: ESP32-controlled rail bridge (rail_bridge.py)
+
+**Date**: 2026-06-17
+
+### Purpose
+
+Let the ESP32-S3-BOX-3 touchscreen drive the rail. Add a host bridge
+`rail_bridge.py` that reads `CMD:*` lines from the BOX3 over USB serial
+and maps them to `LinearMotorController` motion, and exposes rail status
+over HTTP for the ESP32 web monitor. This is the LinearMotorController
+half of a three-repo integration (the BOX3 firmware and the web monitor
+live in the ESP32 repos).
+
+### Design (approved plan)
+
+- Reuse the structure of the sibling `bridge.py`
+  (ESP32S3BOX3MotorController): a lock, a dispatch table, an HTTP server
+  in a daemon thread, and a reconnect loop — but read pyserial instead
+  of TCP and call the rail API.
+- Wire protocol: BOX3 -> host `CMD:X+`, `CMD:X-`, `CMD:X0`,
+  `CMD:MOVE X <mm>`, `CMD:HOME`; host -> BOX3 `POS:<mm>`.
+- Motion: step-jog via `move_relative_mm(+/- step)`, absolute via
+  `move_to_mm`, home -> `move_to_mm(0.0)`. Use `move_to_mm` for accuracy
+  (see LP §2). Refuse moves outside the soft limits
+  `rail_min_mm`/`rail_max_mm` — the rail class has none.
+- HTTP `GET /status` -> `{position_mm, state, target_mm, connected}` for
+  the web monitor.
+
+### Checklist
+
+- [x] Add `rail_bridge.py` (serial loop, dispatch, rail mapping, soft
+      limits, POS feedback thread, HTTP /status)
+- [x] Add `claude_test/test_rail_bridge_parse.py` offline parser test
+      and register it in `claude_test/README.md` (see LP §1)
+- [x] Ruff check and format (see LP §1)
+- [x] Stage 1: offline parser/soft-limit test passes (no hardware) — 8/8
+- [ ] Stage 2: rail-only — locate the port with `probe_ports.py`
+      (see LP §5), connect through the bridge and confirm motion on
+      hardware before marking complete (see LP §1) — BLOCKED 2026-06-17:
+      no amp answered on /dev/ttyUSB0-3 (USB1/2 no EOT, USB3 NAK); rerun
+      when the amp is powered/connected
+- [x] `gh issue create` for this task (#16)
+- [ ] Commit, push, open PR to `main`
+- [ ] Append any new gotcha to `LearnedPatterns.md` (see §9)
+
+### Notes
+
+- The BOX3 firmware (USB-serial transport + single-rail UI) and the web
+  monitor "Rail" tab are separate tasks in the ESP32 repos.
+- ESP-IDF is not installed in this container, so firmware build and full
+  end-to-end verification happen where the toolchain and devices are
+  present. The Python bridge is testable here (rail on `/dev/ttyUSB*`).
