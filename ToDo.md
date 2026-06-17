@@ -428,7 +428,8 @@ live in the ESP32 repos).
       when the amp is powered/connected
 - [x] `gh issue create` for this task (#16)
 - [ ] Commit, push, open PR to `main`
-- [ ] Append any new gotcha to `LearnedPatterns.md` (see §9)
+- [x] Append any new gotcha to `LearnedPatterns.md` (see §9) — added
+      "MINAS rail has only blocking moves" to §2
 
 ### Notes
 

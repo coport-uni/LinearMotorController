@@ -69,6 +69,13 @@
 - **Rule**: Always sweep for empty parens and code-restating comments after a refactor pass.
 (from ToDo#3)
 
+### MINAS rail has only blocking moves — jog must be fixed-step, not continuous
+- **Problem**: An ESP32 controller emits start/stop jog commands (`CMD:X+` … `CMD:X0`), but `LinearMotorController` exposes only the blocking `move_relative_mm` / `move_to_mm`; there is no continuous "start jog / stop jog" primitive.
+- **Cause**: The MINAS standard protocol drives speed (Pr3.04) inside a blocking feedback loop, so `move_relative_mm` returns only after the move finishes and self-stops in its `finally`.
+- **Fix**: `rail_bridge.py` maps each `CMD:X+`/`CMD:X-` to one fixed `jog_step_mm` relative move and treats `CMD:X0` as a no-op; absolute targets go through `move_to_mm` (see §2 overshoot). Soft limits are enforced in the bridge because the class has none.
+- **Rule**: Never assume a continuous-jog primitive for the MINAS rail; map jog presses to fixed-step relative moves and make the stop command a no-op.
+(from ToDo#14)
+
 ---
 
 ## §3. Library Quirks
