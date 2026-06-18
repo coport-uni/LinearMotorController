@@ -47,28 +47,28 @@ box3_serial_timeout_s = 1.0
 
 # Step-jog: one fixed relative move per CMD:X+/CMD:X- press, since the
 # MINAS protocol has only blocking moves (no continuous jog).
-jog_step_mm = 5.0
-jog_speed = 50
-jog_tolerance_mm = 0.5
-jog_timeout_s = 10.0
+jog_step_mm = 5.0  # distance moved per +/- button press
+jog_speed = 25  # r/min; low speed keeps move_relative overshoot small
+jog_tolerance_mm = 0.5  # stop band for a jog step
+jog_timeout_s = 20.0  # abort a jog if it does not settle in time
 
 # Absolute move (CMD:MOVE X <mm>) and CMD:HOME -> move_to_mm(0.0).
 # move_to_mm is the accurate closed-loop primitive (LP 2).
-move_tolerance_mm = 0.1
-move_max_iterations = 5
-move_timeout_per_step_s = 10.0
-home_target_mm = 0.0
+move_tolerance_mm = 0.1  # closed-loop stop band for absolute moves
+move_max_iterations = 1  # closed-loop passes (1 = single pass)
+move_timeout_per_step_s = 10.0  # abort a pass if it does not settle
+home_target_mm = 0.0  # power-on origin
 
 # Soft travel limits enforced here -- LinearMotorController has none.
 # CALIBRATE to the physical rail before enabling motion on hardware.
 rail_min_mm = 0.0
-rail_max_mm = 200.0
+rail_max_mm = 190.0  # reject targets beyond this soft ceiling
 
 # HTTP status/control plane for the web monitor.
 http_port = 8001
 
 # Position feedback cadence: POS:<mm> push + /status cache refresh.
-pos_push_interval_s = 0.5
+pos_push_interval_s = 0.5  # seconds between rail position reads/pushes
 
 # Reconnect backoff for the BOX3 serial link.
 reconnect_delay_s = 2.0
