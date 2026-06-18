@@ -385,7 +385,10 @@ def main():
                 _box3_serial = port_serial
             print("[BOX3] connected. Touch the display to drive the rail.")
             try:
-                for raw in port_serial:
+                while True:
+                    raw = port_serial.readline()
+                    if not raw:
+                        continue  # idle read timeout; keep waiting
                     line = raw.decode("ascii", errors="ignore").strip()
                     if not line.startswith("CMD:"):
                         continue

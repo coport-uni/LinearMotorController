@@ -421,11 +421,13 @@ live in the ESP32 repos).
       and register it in `claude_test/README.md` (see LP §1)
 - [x] Ruff check and format (see LP §1)
 - [x] Stage 1: offline parser/soft-limit test passes (no hardware) — 8/8
-- [ ] Stage 2: rail-only — locate the port with `probe_ports.py`
-      (see LP §5), connect through the bridge and confirm motion on
-      hardware before marking complete (see LP §1) — BLOCKED 2026-06-17:
-      no amp answered on /dev/ttyUSB0-3 (USB1/2 no EOT, USB3 NAK); rerun
-      when the amp is powered/connected
+- [x] Stage 2: rail-only — DONE 2026-06-18. Amp re-enumerated to
+      /dev/ttyUSB4 (CH340 converter, flapping); auto-probe found it
+      (MDDLN45SL), read pos, /status connected; supervised +2mm jog and
+      return confirmed on hardware (see LP §5, §1)
+- [x] Stage 3: full E2E — DONE 2026-06-18. Flashed BOX3 (ttyACM1); user
+      confirmed single-rail UI, live POS display (motor_rx RX works, no
+      fallback needed), touch jog moves the rail, Home returns to ~origin
 - [x] `gh issue create` for this task (#16)
 - [ ] Commit, push, open PR to `main`
 - [x] Append any new gotcha to `LearnedPatterns.md` (see §9) — added
