@@ -17,7 +17,7 @@ def main():
     """Visit a sequence of absolute targets and print residuals."""
     serial_port = "/dev/ttyUSB0"
     targets_mm = [0.0]
-    tolerance_mm = 0.1 # 허용오차
+    tolerance_mm = 0.1
 
     lmc = LinearMotorController(serial_port)
 
