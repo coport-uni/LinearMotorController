@@ -69,6 +69,20 @@
 - **Rule**: Always sweep for empty parens and code-restating comments after a refactor pass.
 (from ToDo#3)
 
+### MINAS rail has only blocking moves — jog must be fixed-step, not continuous
+- **Problem**: An ESP32 controller emits start/stop jog commands (`CMD:X+` … `CMD:X0`), but `LinearMotorController` exposes only the blocking `move_relative_mm` / `move_to_mm`; there is no continuous "start jog / stop jog" primitive.
+- **Cause**: The MINAS standard protocol drives speed (Pr3.04) inside a blocking feedback loop, so `move_relative_mm` returns only after the move finishes and self-stops in its `finally`.
+- **Fix**: `rail_bridge.py` maps each `CMD:X+`/`CMD:X-` to one fixed `jog_step_mm` relative move and treats `CMD:X0` as a no-op; absolute targets go through `move_to_mm` (see §2 overshoot). Soft limits are enforced in the bridge because the class has none.
+- **Rule**: Never assume a continuous-jog primitive for the MINAS rail; map jog presses to fixed-step relative moves and make the stop command a no-op.
+(from ToDo#14)
+
+### pyserial port iteration stops on idle timeout — use an explicit readline loop
+- **Problem**: `for raw in ser:` in `rail_bridge.py`'s BOX3 read loop made the bridge log "connected -> disconnected" every ~1 s whenever the BOX3 was idle (not being touched).
+- **Cause**: a pyserial `Serial` with a read `timeout` raises `StopIteration` when `readline()` returns empty on timeout, so the `for` iterator ends on every idle gap. The original `bridge.py` iterated a TCP socket file object, whose iterator blocks until data or real EOF, so the pattern did not port over to serial.
+- **Fix**: read with an explicit `while True: raw = ser.readline()` loop; `continue` on empty (idle timeout) and reconnect only on `serial.SerialException`.
+- **Rule**: Never iterate a timeout-configured pyserial port with `for x in ser`; use an explicit readline loop and treat an empty read as idle, not disconnect.
+(from ToDo#14)
+
 ---
 
 ## §3. Library Quirks
@@ -129,6 +143,12 @@
 - **Fix**: Track them under ToDo#2's open boxes; do not lose them in the larger backlog.
 - **Rule**: Always re-surface ToDo#2's two open hardware items when next on-site at the rail.
 (from ToDo#2)
+
+### RS485 converter is now a flapping CH340; soft limits guard the target, not the overshoot
+- **Note**: The rail's USB-RS485 converter is a CH340 (`1a86:7523`, `ch341-uart`), not the FTDI/TI the docs assume, and it repeatedly drops and re-enumerates (`usb 4-1: USB disconnect` spam), so its `/dev/ttyUSB` number keeps climbing (ttyUSB4 on 2026-06-18, with ttyUSB0-2 being the BOX3's MKS USB2CAN FTDIs). A drop mid-`move_to_mm` interrupts the closed-loop convergence — one HOME left the rail at ~-2.5 mm instead of 0.
+- **Fix**: `rail_bridge.py` auto-probes the port (never hardcodes); operationally the link needs a powered hub / udev rule to stop flapping before sustained motion is reliable.
+- **Rule**: Always auto-probe the rail port. Remember `rail_bridge` soft limits clamp the commanded *target* only — `move_relative_mm`/`move_to_mm` overshoot (2-7 mm at speed 50) can transiently cross a limit, so keep approach speed low near an end-stop.
+(from ToDo#14)
 
 ---
 
