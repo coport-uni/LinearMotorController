@@ -51,32 +51,27 @@ def check(name, ok):
     print(f"{'PASS' if ok else 'FAIL'}  {name}")
 
 
-# Absolute move maps to move_to_mm with the parsed float value.
-fake = setup(0.0)
-rail_bridge.box3_dispatch("MOVE X 123")
-check("MOVE X 123 -> move_to_mm(123.0)", fake.calls == [("move_to_mm", 123.0)])
-
-# Jog +/- map to one fixed relative step each.
+# The rail is the Y axis: Y jog +/- map to one fixed relative step each.
 fake = setup(50.0)
-rail_bridge.box3_dispatch("X+")
+rail_bridge.box3_dispatch("Y+")
 check(
-    "X+ -> move_relative_mm(+step)",
+    "Y+ -> move_relative_mm(+step)",
     fake.calls == [("move_relative_mm", rail_bridge.jog_step_mm)],
 )
 
 fake = setup(50.0)
-rail_bridge.box3_dispatch("X-")
+rail_bridge.box3_dispatch("Y-")
 check(
-    "X- -> move_relative_mm(-step)",
+    "Y- -> move_relative_mm(-step)",
     fake.calls == [("move_relative_mm", -rail_bridge.jog_step_mm)],
 )
 
-# Stop is a no-op: the step move has already finished and self-stopped.
+# Y0 is a no-op: the step move has already finished and self-stopped.
 fake = setup(50.0)
-rail_bridge.box3_dispatch("X0")
-check("X0 -> no rail call", fake.calls == [])
+rail_bridge.box3_dispatch("Y0")
+check("Y0 -> no rail call", fake.calls == [])
 
-# Home maps to move_to_mm(home_target_mm).
+# HOME maps to move_to_mm(home_target_mm).
 fake = setup(50.0)
 rail_bridge.box3_dispatch("HOME")
 check(
@@ -84,21 +79,23 @@ check(
     fake.calls == [("move_to_mm", rail_bridge.home_target_mm)],
 )
 
-# An absolute move past the soft limit is refused (no rail call).
-fake = setup(0.0)
-rail_bridge.box3_dispatch(f"MOVE X {rail_bridge.rail_max_mm + 100:.0f}")
-check("out-of-limit MOVE refused", fake.calls == [])
-
-# A jog that would cross the soft limit is refused.
-fake = setup(rail_bridge.rail_max_mm - 1.0)
+# X/Z and MOVE are reserved for the ball-screw -> ignored (no rail call).
+fake = setup(50.0)
 rail_bridge.box3_dispatch("X+")
-check("out-of-limit jog refused", fake.calls == [])
+rail_bridge.box3_dispatch("X-")
+rail_bridge.box3_dispatch("Z+")
+rail_bridge.box3_dispatch("MOVE X 123 Z 45")
+check("X/Z/MOVE ignored (ball-screw reserved)", fake.calls == [])
 
-# Malformed and unknown lines are ignored without crashing.
+# A Y jog that would cross the soft limit is refused.
+fake = setup(rail_bridge.rail_max_mm - 1.0)
+rail_bridge.box3_dispatch("Y+")
+check("out-of-limit Y jog refused", fake.calls == [])
+
+# Unknown lines are ignored without crashing.
 fake = setup(0.0)
-rail_bridge.box3_dispatch("MOVE X abc")
 rail_bridge.box3_dispatch("GARBAGE")
-check("malformed/unknown ignored", fake.calls == [])
+check("unknown ignored", fake.calls == [])
 
 passed = sum(results)
 print(f"\nSUMMARY: {passed}/{len(results)} passed")

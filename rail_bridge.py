@@ -2,15 +2,16 @@
 
 The BOX3 firmware emits newline-framed ASCII commands over USB serial:
 
-    CMD:X+        jog one fixed step, positive
-    CMD:X-        jog one fixed step, negative
-    CMD:X0        stop / no-op (a step move has already finished)
-    CMD:MOVE X <mm>   absolute move to <mm>
-    CMD:HOME      return to the power-on origin (0 mm)
+    CMD:Y+        jog the rail one fixed step, positive
+    CMD:Y-        jog the rail one fixed step, negative
+    CMD:Y0        stop / no-op (a step move has already finished)
+    CMD:HOME      return the rail to the power-on origin (0 mm)
 
-This bridge reads those lines, maps them onto LinearMotorController
-motion calls, pushes "POS:<mm>" back to the BOX3 for a live display,
-and serves rail status over HTTP so the ESP32 web monitor can poll it.
+X/Z and "MOVE X <x> Z <z>" are reserved for the future ball-screw motors
+and are ignored here. This bridge reads the Y/HOME lines, maps them onto
+LinearMotorController motion calls, pushes "STAT:<conn>:<mm>" back to the
+BOX3 (link health + position) for the live display, and serves rail
+status over HTTP so the ESP32 web monitor can poll it.
 
 It mirrors the structure of the sibling ESP32S3BOX3MotorController
 bridge.py (one lock, a dispatch table, an HTTP server in a daemon
@@ -172,9 +173,9 @@ def _home():
 
 
 _box3_routes = {
-    "X+": lambda: _jog(jog_step_mm),
-    "X-": lambda: _jog(-jog_step_mm),
-    "X0": lambda: None,
+    "Y+": lambda: _jog(jog_step_mm),
+    "Y-": lambda: _jog(-jog_step_mm),
+    "Y0": lambda: None,
     "HOME": _home,
 }
 
@@ -182,19 +183,11 @@ _box3_routes = {
 def box3_dispatch(cmd):
     """Route one CMD:* payload (the part after "CMD:") from the BOX3.
 
-    The absolute "MOVE X <mm>" form is handled first, then the fixed
-    step-jog / home table. Unknown commands are ignored, matching the
-    sibling bridge.py's tolerance of stray serial lines.
+    Only the rail's Y-axis jog / home commands act. X/Z and the 2D Move
+    plot's "MOVE X <x> Z <z>" are reserved for the future ball-screw and
+    are ignored here, matching the sibling bridge.py's tolerance of stray
+    serial lines.
     """
-    if cmd.startswith("MOVE "):
-        parts = cmd.split()
-        try:
-            target_mm = float(parts[parts.index("X") + 1])
-        except (ValueError, IndexError):
-            print(f"[WARN] bad MOVE line: {cmd!r}")
-            return
-        _move_to(target_mm)
-        return
     handler = _box3_routes.get(cmd)
     if handler is not None:
         handler()
@@ -234,8 +227,10 @@ def _publish_pos_loop():
             else:
                 _set_state(position_mm=pos, state="idle", connected=True)
                 cached_mm = pos
+        with _state_lock:
+            conn = 1 if _state["connected"] else 0
         if cached_mm is not None:
-            _push_box3_line(f"POS:{cached_mm:.3f}")
+            _push_box3_line(f"STAT:{conn}:{cached_mm:.3f}")
 
 
 def _open_box3():
