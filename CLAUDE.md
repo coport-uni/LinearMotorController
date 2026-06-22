@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Panasonic MINAS A6 series servo amplifier controller for linear rail systems. Communicates with the servo amp over RS485 using the **MINAS 표준 프로토콜** (standard serial protocol), not Modbus.
+Panasonic MINAS A6 series servo amplifier controller for linear rail systems. Communicates with the servo amp over RS485 using the **MINAS 표준 프로토콜** (standard serial protocol).
 
 ## Environment
 
@@ -697,6 +697,5 @@ Checks and formatting will now run automatically on `git commit`.
 
 ## Reference Documents (PDFs in repo)
 
-- `MinasA6_driver_main.pdf` — Modbus통신사양·Block동작기능편 (SX-DSV03384). Register addresses for Modbus mode.
+- `MinasA6_driver_main.pdf` — Modbus통신사양·Block동작기능편 (SX-DSV03384). Retained for reference only; the project uses the MINAS standard protocol (Modbus path dropped).
 - `MinasA6_driver_sub.pdf` — 취급설명서(종합편). Contains MINAS standard protocol spec (P.7-28~7-41), command details, parameter list, wiring diagrams.
-- `Modbus_reference.pdf` — Additional Modbus reference.

@@ -19,7 +19,7 @@
 ### Hardware verification is required before marking a motion-API change complete
 - **Problem**: Code that compiles and lints clean can still misbehave on the actual rail (overshoot, wrong direction, no stop on interrupt).
 - **Cause**: The MINAS amp + encoder + mechanical loop is the only authority on whether positioning is correct; static analysis cannot confirm it.
-- **Fix**: After every change to `LinearMotorController.py` or `LinearMotorControllerModbus.py`, run the demo on `/dev/ttyUSB0` and observe the rail.
+- **Fix**: After every change to `LinearMotorController.py`, run the demo on `/dev/ttyUSB0` and observe the rail.
 - **Rule**: Always verify motor behavior on hardware before checking off a motion-related ToDo item.
 (from ToDo#3, #6, #7)
 

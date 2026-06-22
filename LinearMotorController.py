@@ -11,6 +11,13 @@ import serial
 
 
 class LinearMotorController:
+    """Driver for a Panasonic MINAS A6 servo amplifier over RS485.
+
+    Speaks the MINAS standard serial protocol (ENQ/EOT/ACK/NAK
+    handshaking, 9600 8N1) on a single fixed axis, exposing position
+    reads and a software closed-loop absolute move (move_to_mm).
+    """
+
     # Magnetic linear encoder: 1 um/pulse -> 1000 pulses/mm.
     # Adjust after empirical calibration if needed.
     pulses_per_mm = 1000
@@ -20,6 +27,17 @@ class LinearMotorController:
     # toward tolerance_mm. Edit here to change move_to_mm speeds.
     move_to_mm_speed_schedule = [50, 10, 3, 1, 1]
 
+    # MINAS standard protocol control bytes.
+    _enq = 0x05  # Enquiry
+    _eot = 0x04  # End of transmission
+    _ack = 0x06  # Acknowledgement
+    _nak = 0x15  # Negative acknowledgement
+
+    # Serial and handshake timeouts (seconds); no-response error code.
+    _serial_timeout_s = 2
+    _response_timeout_s = 2
+    _no_response_error = 0xFF
+
     def __init__(self, port: str):
         """Initialize serial port with 8N1 MINAS standard settings."""
         self.ser = serial.Serial(
@@ -28,14 +46,9 @@ class LinearMotorController:
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE,
-            timeout=2,
+            timeout=self._serial_timeout_s,
         )
-        self.id = 1
-
-        self.ENQ = 0x05  # Enquiry
-        self.EOT = 0x04  # End of transmission
-        self.ACK = 0x06  # Acknowledgement
-        self.NAK = 0x15  # Negative acknowledgement
+        self.axis_id = 1
 
     def _build_command(
         self, command: int, mode: int, params: bytes = b""
@@ -59,7 +72,7 @@ class LinearMotorController:
         """Extract parameter bytes and error code from a response."""
         param_count = response[0]
         params = response[3 : 3 + param_count]
-        error_code = params[-1] if params else 0xFF
+        error_code = params[-1] if params else self._no_response_error
 
         return params, error_code
 
@@ -74,23 +87,23 @@ class LinearMotorController:
 
         Return the raw response bytes, or None on failure.
         """
-        module_byte = 0x80 | (self.id & 0x7F)
+        module_byte = 0x80 | (self.axis_id & 0x7F)
         self.ser.reset_input_buffer()
-        self.ser.write(bytes([module_byte, self.ENQ]))
+        self.ser.write(bytes([module_byte, self._enq]))
 
-        start = time.time()
+        start_time = time.time()
         eot_received = False
 
-        while time.time() - start < 2:
+        while time.time() - start_time < self._response_timeout_s:
             data = self.ser.read(1)
 
-            if data and data[0] == self.EOT:
+            if data and data[0] == self._eot:
                 eot_received = True
 
                 break
 
         if not eot_received:
-            print(" No EOT response from amplifier.")
+            print("No EOT response from amplifier.")
             return None
 
         self.ser.write(block)
@@ -101,25 +114,25 @@ class LinearMotorController:
 
             return None
 
-        if ack_data[0] == self.NAK:
+        if ack_data[0] == self._nak:
             print("Received NAK (data error).")
 
             return None
 
-        if ack_data[0] != self.ACK:
+        if ack_data[0] != self._ack:
             print(f"Unexpected response: 0x{ack_data[0]:02X}")
 
             return None
 
-        enq_received = len(ack_data) >= 2 and ack_data[1] == self.ENQ
+        enq_received = len(ack_data) >= 2 and ack_data[1] == self._enq
 
         if not enq_received:
-            start = time.time()
+            start_time = time.time()
 
-            while time.time() - start < 2:
+            while time.time() - start_time < self._response_timeout_s:
                 data = self.ser.read(1)
 
-                if data and data[0] == self.ENQ:
+                if data and data[0] == self._enq:
                     enq_received = True
 
                     break
@@ -129,7 +142,7 @@ class LinearMotorController:
 
             return None
 
-        self.ser.write(bytes([0x80, self.EOT]))
+        self.ser.write(bytes([module_byte, self._eot]))
 
         first_byte = self.ser.read(1)
 
@@ -153,13 +166,13 @@ class LinearMotorController:
 
         response = first_byte + remaining
 
-        if sum(response) & 0xFF != 0:
+        if (sum(response) & 0xFF) != 0:
             print(f"  Checksum error (sum: 0x{sum(response) & 0xFF:02X}).")
-            self.ser.write(bytes([self.NAK]))
+            self.ser.write(bytes([self._nak]))
 
             return None
 
-        self.ser.write(bytes([self.ACK]))
+        self.ser.write(bytes([self._ack]))
 
         return response
 
