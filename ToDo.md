@@ -382,3 +382,47 @@ Task 12 found the amp on `/dev/ttyUSB3` after USB re-enumeration
       (see LP §1)
 - [x] `gh issue create` for this task (#15)
 - [x] Commit, push, and open PR to `main` (6b5e29d, PR #13)
+
+---
+
+## Task 14: PID Position Controller prototype (Issue #9)
+
+**Date**: 2026-06-22
+**GitHub Issue**: #9 (the issue title calls it "Task 11"; the ToDo
+sequence is at Task 14)
+
+### Purpose
+
+Replace move_to_mm()'s fixed [50, 10, 3, 1, 1] r/min speed schedule
+with a tunable PID loop kept in claude_test/, so gains can be tuned on
+hardware without touching the production class (CLAUDE.md §3).
+move_to_mm.py stays as the schedule baseline for comparison.
+
+### Checklist
+
+- [x] `claude_test/pid_move_to_mm.py`: `PIDController` (gains as class
+      attributes) + `main()`; iterative PID over `move_relative_mm`
+- [x] `compute()` returns `(output, p, i, d)` for stdout + CSV logging
+- [x] Anti-windup: conditional integration (skip when the output is
+      clamped at MAX magnitude against a same-sign error)
+- [x] EMA-filtered derivative (`derivative_alpha`)
+- [x] Output saturation `[output_min, output_max]` + deadband
+- [x] CSV logger (stdlib `csv`), timestamped `pid_log_*.csv`, flushed
+- [x] Outer `try/finally` safety stop (Pr3.04 = 0) per LP §2
+- [x] `claude_test/test_pid_compute.py`: offline P-only, saturation,
+      sign, output_min floor, deadband, anti-windup checks — 7/7 PASS
+- [x] `ruff check` + `ruff format --check` clean
+- [x] Append index rows to `claude_test/README.md` (LP §1)
+- [x] Hardware single-step (target 100 mm) — verified by the user
+      (multi-step is configurable via `targets_mm`)
+- [x] Tune kp/ki/kd: hardware-tuned to P-only kp=4.0 (ki=kd=0),
+      output_max=25 r/min; recorded in `claude_test/README.md`
+- [ ] Commit, push, open PR
+
+> Adopted the user's hardware-verified controller as the #9 deliverable
+> (it supersedes the offline-only prototype). Tuning converged on a
+> P-controller (kp=4.0), matching Issue #11's intent. Also added
+> `claude_test/pid_measure_accuracy.py` (N-trial static-speed accuracy)
+> as the seed for Issue #8. output_max=25 is an intentional tuning
+> choice within the [1, 500] move_relative clamp. Pairs with Issue #11
+> (promote the P-controller into LinearMotorController.py).
