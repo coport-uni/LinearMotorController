@@ -425,3 +425,44 @@ the NUC server.
 > HotplateController's `external/ESP32S3/`) follow in a separate task.
 > `LinearMotorController.py` is the kept RS485 device layer; the
 > `rail_bridge.py` serial path (PR #17) is superseded by this server.
+
+---
+
+## Task 17: ESP-BOX-3 WiFi client (external/ESP32S3, mirror HotplateController)
+
+**Date**: 2026-06-23
+
+### Purpose
+
+Phase 2-4 of the WiFi redesign: a new `external/ESP32S3/` ESP-IDF
+firmware for the ESP32-S3-BOX-3 that controls the rail over WiFi via the
+FastAPI server (Task 16, `:17052`), with **no USB link to the NUC**.
+Mirrors HotplateController's `external/ESP32S3/` exactly (WiFi STA + a
+command-queue + single HTTP client task + LVGL UI); only the device and
+the commands differ (rail jog/home vs hotplate temp/speed/heater/motor).
+
+### Checklist
+
+- [x] Build files: `CMakeLists.txt`, `sdkconfig.defaults`,
+      `main/CMakeLists.txt`, `main/idf_component.yml` (esp-box-3 + cjson),
+      `main/Kconfig.projbuild` (`RAIL_WIFI_*` / `RAIL_SERVER_URL` (default
+      `:17052`) / `RAIL_POLL_INTERVAL_S`)
+- [x] `main/network.c/.h` — WiFi STA (copied from hotplate, `RAIL_*`)
+- [x] `main/rail_client.c/.h` — mirror `hotplate_client.c`: command queue
+      + single task, `make_url`/`http_get`/`http_post`, cJSON parse,
+      `fetch_status` (GET /status -> `ui_set_status`), `execute_command`
+      (POST /control/jog/start/{dir}, /control/jog/stop, /control/home)
+- [x] `main/ui.c/.h` — LVGL readings panel (position / target / state /
+      age) + **hold-to-jog** buttons (PRESSED -> jog/start, RELEASED ->
+      jog/stop) + a Home button
+- [x] `main/buttons_check.c/.h` + `main/main.c` — on-board CONFIG button
+      homes the rail; init order network_init -> rail_client_init
+- [x] `external/ESP32S3/README.md` + `.gitignore` (build/ etc.)
+- [x] `idf.py build` clean (ESP-IDF v6.0.1, zero warnings) ->
+      `rail_monitor.bin`, 14% free
+- [ ] Flash on the real ESP-BOX-3 + WiFi-only E2E vs the running server
+      (Phase 5: hold-jog moves the rail, Home, live position, offline)
+- [ ] Commit, push
+
+> Built but not flashed (the BOX3 currently runs the older firmware).
+> Phase 5 flashes it and drives the rail over WiFi against `server.py`.
