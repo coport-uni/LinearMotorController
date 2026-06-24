@@ -415,9 +415,11 @@ the NUC server.
 - [x] `docs/server_api.md` — endpoints + curl + ESP32 examples
 - [x] `requirements.txt` — pyserial + fastapi + uvicorn[standard]
 - [x] `ruff check` + `ruff format --check` clean
-- [ ] Live hardware check: `python3 server.py /dev/ttyUSB4` + `curl`
-      the endpoints (supervised; frees the rail port)
-- [ ] Commit, push, open PR
+- [x] Live hardware check on `/dev/ttyUSB4` (supervised, 2026-06-24):
+      read-only `/health`/`/status`/`/` OK; control verified end to end
+      -- `move{100}` -> 99.973 mm, `jog/start/negative`+`jog/stop`
+      -> 49.4 mm, `home` -> -0.099 mm, `move{999}` -> 422
+- [x] Commit, push, open PR (5fee311, PR #20)
 
 > Phase 2-4 (the `external/ESP32S3/` ESP-BOX-3 client mirroring
 > HotplateController's `external/ESP32S3/`) follow in a separate task.
