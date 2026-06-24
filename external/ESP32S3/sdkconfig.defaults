@@ -15,13 +15,13 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # 240 MHz CPU clock
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
-# Memory for LVGL double buffering
-CONFIG_LV_MEM_CUSTOM=y
-CONFIG_LV_MEMCPY_MEMSET_STD=y
-
 # Enable %f in LVGL's built-in sprintf so lv_label_set_text_fmt("%f", x)
 # prints the number instead of a literal 'f'.
 CONFIG_LV_USE_FLOAT=y
+
+# Fonts used by the ported control UI (ui.c).
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
 
 # USB Serial JTAG console
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

@@ -7,8 +7,9 @@ extern "C" {
 #endif
 
 typedef struct {
-    void (*on_config)(void);   /* short press on BSP_BUTTON_CONFIG */
-    void (*on_mute)(void);     /* short press on BSP_BUTTON_MUTE   */
+    void (*on_config)(void);        /* short press on BSP_BUTTON_CONFIG */
+    void (*on_mute)(void);          /* short press on BSP_BUTTON_MUTE   */
+    void (*on_config_long)(void);   /* long press on BSP_BUTTON_CONFIG  */
 } buttons_callbacks_t;
 
 /**

@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.c"
         "ui.c"
+        "prov_ui.c"
         "buttons_check.c"
         "network.c"
         "rail_client.c"
@@ -15,4 +16,5 @@ idf_component_register(
         esp-tls
         driver
         esp_timer
+        esp_system
 )

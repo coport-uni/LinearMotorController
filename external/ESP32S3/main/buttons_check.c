@@ -22,6 +22,16 @@ static void on_short(void *handle, void *usr_data)
     }
 }
 
+static void on_long(void *handle, void *usr_data)
+{
+    (void)handle;
+    int idx = (int)(intptr_t)usr_data;
+
+    if (idx == BSP_BUTTON_CONFIG && s_user_cbs.on_config_long) {
+        s_user_cbs.on_config_long();
+    }
+}
+
 esp_err_t buttons_check_init(const buttons_callbacks_t *cbs)
 {
     if (cbs) {
@@ -42,6 +52,8 @@ esp_err_t buttons_check_init(const buttons_callbacks_t *cbs)
         }
         iot_button_register_cb(handles[i], BUTTON_SINGLE_CLICK,
                                NULL, on_short, (void *)(intptr_t)i);
+        iot_button_register_cb(handles[i], BUTTON_LONG_PRESS_START,
+                               NULL, on_long, (void *)(intptr_t)i);
     }
     return ESP_OK;
 }

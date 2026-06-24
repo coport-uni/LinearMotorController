@@ -1,21 +1,24 @@
 menu "Rail monitor"
 
 config RAIL_WIFI_SSID
-    string "WiFi SSID"
-    default "TP_Link_0624"
+    string "WiFi SSID (optional fallback)"
+    default ""
     help
-        WPA2-Personal SSID. Leave empty to skip WiFi bring-up; the UI
-        shows a "configure WiFi" message.
+        Optional hard-coded WPA2-Personal SSID. Leave empty (default) to
+        use on-device provisioning: the device shows a Wi-Fi picker and
+        on-screen keyboard, and stores the chosen credentials in NVS. Set
+        this only to skip provisioning with a fixed network.
 
 config RAIL_WIFI_PASSWORD
-    string "WiFi password"
-    default "peal2024"
+    string "WiFi password (optional fallback)"
+    default ""
     help
-        WPA2-Personal passphrase. Stored in the local sdkconfig only.
+        Passphrase for the optional fallback SSID above. Ignored when the
+        SSID is empty (provisioning mode).
 
 config RAIL_SERVER_URL
     string "Rail server base URL"
-    default "http://192.168.1.16:17052"
+    default "http://192.168.1.129:17052"
     help
         Base URL of the LinearMotorController FastAPI server. Include the
         scheme and port. A trailing slash is optional.

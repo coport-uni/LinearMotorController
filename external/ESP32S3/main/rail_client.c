@@ -237,12 +237,6 @@ static void client_task(void *arg)
 {
     (void)arg;
 
-    if (strlen(CONFIG_RAIL_WIFI_SSID) == 0) {
-        ui_set_offline("configure WiFi (menuconfig)");
-        vTaskDelete(NULL);
-        return;
-    }
-
     ui_set_offline("WiFi connecting...");
     while (!network_is_connected()) {
         network_wait_connected(2000);

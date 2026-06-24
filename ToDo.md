@@ -466,3 +466,52 @@ the commands differ (rail jog/home vs hotplate temp/speed/heater/motor).
 
 > Built but not flashed (the BOX3 currently runs the older firmware).
 > Phase 5 flashes it and drives the rail over WiFi against `server.py`.
+
+---
+
+## Task 18: on-device WiFi provisioning + port the existing BOX3 control UI
+
+**Date**: 2026-06-24
+
+### Purpose
+
+Phase 5 surfaced two things on real hardware:
+1. A hard-coded WiFi SSID is fragile (the placeholder had the wrong
+   separator: `TP_Link_0624` vs the real `TP-Link_0624`). The user wants
+   to pick the network on the device, like a phone -> **on-device touch
+   provisioning (option B)**.
+2. The control UI must match the **existing `ESP32S3BOX3MotorController`
+   UI** (X/Z quadrant dial + Y buttons + Move plot + Status tabs), not the
+   HotplateController-style panel, per the integration plan. The rail is
+   the **Y axis**; X/Z stay as placeholders for the future pipette station.
+
+### Checklist
+
+- [x] `network.c/.h`: store credentials in NVS (`rail_wifi` namespace),
+      load them at boot (NVS first, Kconfig fallback), `network_scan()`,
+      `network_set_credentials()`, `network_clear_credentials()`,
+      `network_has_credentials()`, and SSID/IP/RSSI/MAC getters for the
+      Status tab. WiFi starts idle (no auto-connect) when uncredentialed.
+- [x] `prov_ui.c/.h`: LVGL provisioning screen -- scanned-network list +
+      on-screen keyboard for the password; on connect, hand off to the
+      control UI. Kconfig WiFi defaults emptied so provisioning is the
+      default path.
+- [x] `main.c`: branch at boot -- provision when uncredentialed, else run.
+      CONFIG long-press clears credentials and reboots (re-provision).
+- [x] `ui.c`: faithful port of the `ESP32S3BOX3MotorController` 3-tab UI
+      (Move / Jog Control / Status). **Y buttons -> rail jog over WiFi**
+      (hold = continuous), **centre Home -> rail home**. X/Z dial + Move
+      plot kept as pipette-station placeholders (no backend). Status tab
+      shows WiFi (state/SSID/IP/RSSI/MAC) + rail server/position/age.
+- [x] `idf.py build` clean (ESP-IDF v6.0.1, zero warnings)
+- [x] Flash + on-device WiFi setup verified: picked `TP-Link_0624`, got
+      `192.168.1.206`; server URL corrected to the real NUC IP
+      `192.168.1.129:17052` (placeholder was `.16`)
+- [x] **WiFi-only E2E verified on hardware (2026-06-24)**: BOX3 reaches
+      `192.168.1.129:17052`; Y+/Y- jog and Home confirmed via server log
+      (`POST /control/jog/start/{positive,negative}`, `/jog/stop`, 200 OK)
+      and by eye on the rail
+
+> NUC LAN IP is `192.168.1.129` (same host as the hotplate server); host
+> publishes `:17052` to the LAN (alongside ssh `:17040`). The container
+> only sees `172.17.0.2`, so the server URL must be the host LAN IP.
