@@ -515,3 +515,30 @@ Phase 5 surfaced two things on real hardware:
 > NUC LAN IP is `192.168.1.129` (same host as the hotplate server); host
 > publishes `:17052` to the LAN (alongside ssh `:17040`). The container
 > only sees `172.17.0.2`, so the server URL must be the host LAN IP.
+
+---
+
+## Task 19: integrate the PID controller into the WiFi server
+
+**Date**: 2026-06-24
+
+### Purpose
+
+The WiFi branch was cut from `main`, whose `LinearMotorController.py` uses
+the old fixed-speed-schedule `move_to_mm`. The hardware-verified P
+controller (Issue #11, branch `feature/issue-11-pid-controller`,
+`9dc7b8e`) lives separately. Bring it into the WiFi branch so `server.py`
+drives the rail with PID. No server change is needed: `server.py` only
+calls the driver's public `move_to_mm` / `move_relative_mm`, so swapping
+the driver makes the WiFi path use PID automatically.
+
+### Checklist
+
+- [x] Preserve `feature/issue-11-pid-controller` by pushing it to the fork
+- [x] Bring `LinearMotorController.py` (PID version) into
+      `feature/wifi-fastapi-server` (driver-only; #11's README/ToDo left out)
+- [x] ruff clean + `py_compile` OK
+- [x] **HW-verified through the WiFi server (2026-06-24)**: `POST
+      /control/move {30}` converged to 30.030 mm and `home` to -0.067 mm;
+      server log shows the P-controller loop (speed = kp*error, clamped to
+      output_max=25): iter1 @25 -> iter2 @5 -> iter3 @1, |error| 0.03 mm
