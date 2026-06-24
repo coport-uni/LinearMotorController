@@ -382,3 +382,44 @@ Task 12 found the amp on `/dev/ttyUSB3` after USB re-enumeration
       (see LP §1)
 - [x] `gh issue create` for this task (#15)
 - [x] Commit, push, and open PR to `main` (6b5e29d, PR #13)
+
+---
+
+## Task 16: WiFi FastAPI rail server (mirror HotplateController)
+
+**Date**: 2026-06-23
+
+### Purpose
+
+Admin redirect: the ESP32 must control the rail over **WiFi (no USB to
+the NUC)**, with the **NUC running a FastAPI REST server** on the
+dedicated port **17052**. Follow the same form as the sibling repo
+`coport-uni/HotplateController` (FastAPI `DeviceMonitor` + ESP32 HTTP
+client); only the NUC↔device link differs (RS485/MINAS vs USB-CDC).
+`LinearMotorController.py` (+ PID) is unchanged. This task is Phase 1 —
+the NUC server.
+
+### Checklist
+
+- [x] `server.py` mirroring `hotplate_controller/server.py`:
+      `RailMonitor` (poller thread + lock + atomic snapshot),
+      `GET /status` (+`age_seconds`) / `/health` / `/` (HTML dashboard),
+      `POST /control/move|jog/start/{dir}|jog/stop|home`, bind
+      `0.0.0.0:17052`, `create_app()` + `lifespan` + `main()`
+- [x] Reuse the continuous-jog + soft-limit watchdog logic from
+      `rail_bridge.py` (lifted into `RailMonitor`); jog has a
+      server-side max-duration auto-stop (dropped-`stop` WiFi safety)
+- [x] `claude_test/test_server.py` — offline `RailMonitor` logic test
+      (snapshot, move limits, jog Pr3.04 writes, disconnected) — 9/9
+- [x] `claude_test/poke_server.py` — read-only live probe
+- [x] `docs/server_api.md` — endpoints + curl + ESP32 examples
+- [x] `requirements.txt` — pyserial + fastapi + uvicorn[standard]
+- [x] `ruff check` + `ruff format --check` clean
+- [ ] Live hardware check: `python3 server.py /dev/ttyUSB4` + `curl`
+      the endpoints (supervised; frees the rail port)
+- [ ] Commit, push, open PR
+
+> Phase 2-4 (the `external/ESP32S3/` ESP-BOX-3 client mirroring
+> HotplateController's `external/ESP32S3/`) follow in a separate task.
+> `LinearMotorController.py` is the kept RS485 device layer; the
+> `rail_bridge.py` serial path (PR #17) is superseded by this server.
