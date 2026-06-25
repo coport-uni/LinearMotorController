@@ -382,3 +382,163 @@ Task 12 found the amp on `/dev/ttyUSB3` after USB re-enumeration
       (see LP §1)
 - [x] `gh issue create` for this task (#15)
 - [x] Commit, push, and open PR to `main` (6b5e29d, PR #13)
+
+---
+
+## Task 16: WiFi FastAPI rail server (mirror HotplateController)
+
+**Date**: 2026-06-23
+
+### Purpose
+
+Admin redirect: the ESP32 must control the rail over **WiFi (no USB to
+the NUC)**, with the **NUC running a FastAPI REST server** on the
+dedicated port **17052**. Follow the same form as the sibling repo
+`coport-uni/HotplateController` (FastAPI `DeviceMonitor` + ESP32 HTTP
+client); only the NUC↔device link differs (RS485/MINAS vs USB-CDC).
+`LinearMotorController.py` (+ PID) is unchanged. This task is Phase 1 —
+the NUC server.
+
+### Checklist
+
+- [x] `server.py` mirroring `hotplate_controller/server.py`:
+      `RailMonitor` (poller thread + lock + atomic snapshot),
+      `GET /status` (+`age_seconds`) / `/health` / `/` (HTML dashboard),
+      `POST /control/move|jog/start/{dir}|jog/stop|home`, bind
+      `0.0.0.0:17052`, `create_app()` + `lifespan` + `main()`
+- [x] Reuse the continuous-jog + soft-limit watchdog logic from
+      `rail_bridge.py` (lifted into `RailMonitor`); jog has a
+      server-side max-duration auto-stop (dropped-`stop` WiFi safety)
+- [x] `claude_test/test_server.py` — offline `RailMonitor` logic test
+      (snapshot, move limits, jog Pr3.04 writes, disconnected) — 9/9
+- [x] `claude_test/poke_server.py` — read-only live probe
+- [x] `docs/server_api.md` — endpoints + curl + ESP32 examples
+- [x] `requirements.txt` — pyserial + fastapi + uvicorn[standard]
+- [x] `ruff check` + `ruff format --check` clean
+- [x] Live hardware check on `/dev/ttyUSB4` (supervised, 2026-06-24):
+      read-only `/health`/`/status`/`/` OK; control verified end to end
+      -- `move{100}` -> 99.973 mm, `jog/start/negative`+`jog/stop`
+      -> 49.4 mm, `home` -> -0.099 mm, `move{999}` -> 422
+- [x] Commit, push, open PR (5fee311, PR #20)
+
+> Phase 2-4 (the `external/ESP32S3/` ESP-BOX-3 client mirroring
+> HotplateController's `external/ESP32S3/`) follow in a separate task.
+> `LinearMotorController.py` is the kept RS485 device layer; the
+> `rail_bridge.py` serial path (PR #17) is superseded by this server.
+
+---
+
+## Task 17: ESP-BOX-3 WiFi client (external/ESP32S3, mirror HotplateController)
+
+**Date**: 2026-06-23
+
+### Purpose
+
+Phase 2-4 of the WiFi redesign: a new `external/ESP32S3/` ESP-IDF
+firmware for the ESP32-S3-BOX-3 that controls the rail over WiFi via the
+FastAPI server (Task 16, `:17052`), with **no USB link to the NUC**.
+Mirrors HotplateController's `external/ESP32S3/` exactly (WiFi STA + a
+command-queue + single HTTP client task + LVGL UI); only the device and
+the commands differ (rail jog/home vs hotplate temp/speed/heater/motor).
+
+### Checklist
+
+- [x] Build files: `CMakeLists.txt`, `sdkconfig.defaults`,
+      `main/CMakeLists.txt`, `main/idf_component.yml` (esp-box-3 + cjson),
+      `main/Kconfig.projbuild` (`RAIL_WIFI_*` / `RAIL_SERVER_URL` (default
+      `:17052`) / `RAIL_POLL_INTERVAL_S`)
+- [x] `main/network.c/.h` — WiFi STA (copied from hotplate, `RAIL_*`)
+- [x] `main/rail_client.c/.h` — mirror `hotplate_client.c`: command queue
+      + single task, `make_url`/`http_get`/`http_post`, cJSON parse,
+      `fetch_status` (GET /status -> `ui_set_status`), `execute_command`
+      (POST /control/jog/start/{dir}, /control/jog/stop, /control/home)
+- [x] `main/ui.c/.h` — LVGL readings panel (position / target / state /
+      age) + **hold-to-jog** buttons (PRESSED -> jog/start, RELEASED ->
+      jog/stop) + a Home button
+- [x] `main/buttons_check.c/.h` + `main/main.c` — on-board CONFIG button
+      homes the rail; init order network_init -> rail_client_init
+- [x] `external/ESP32S3/README.md` + `.gitignore` (build/ etc.)
+- [x] `idf.py build` clean (ESP-IDF v6.0.1, zero warnings) ->
+      `rail_monitor.bin`, 14% free
+- [ ] Flash on the real ESP-BOX-3 + WiFi-only E2E vs the running server
+      (Phase 5: hold-jog moves the rail, Home, live position, offline)
+- [ ] Commit, push
+
+> Built but not flashed (the BOX3 currently runs the older firmware).
+> Phase 5 flashes it and drives the rail over WiFi against `server.py`.
+
+---
+
+## Task 18: on-device WiFi provisioning + port the existing BOX3 control UI
+
+**Date**: 2026-06-24
+
+### Purpose
+
+Phase 5 surfaced two things on real hardware:
+1. A hard-coded WiFi SSID is fragile (the placeholder had the wrong
+   separator: `TP_Link_0624` vs the real `TP-Link_0624`). The user wants
+   to pick the network on the device, like a phone -> **on-device touch
+   provisioning (option B)**.
+2. The control UI must match the **existing `ESP32S3BOX3MotorController`
+   UI** (X/Z quadrant dial + Y buttons + Move plot + Status tabs), not the
+   HotplateController-style panel, per the integration plan. The rail is
+   the **Y axis**; X/Z stay as placeholders for the future pipette station.
+
+### Checklist
+
+- [x] `network.c/.h`: store credentials in NVS (`rail_wifi` namespace),
+      load them at boot (NVS first, Kconfig fallback), `network_scan()`,
+      `network_set_credentials()`, `network_clear_credentials()`,
+      `network_has_credentials()`, and SSID/IP/RSSI/MAC getters for the
+      Status tab. WiFi starts idle (no auto-connect) when uncredentialed.
+- [x] `prov_ui.c/.h`: LVGL provisioning screen -- scanned-network list +
+      on-screen keyboard for the password; on connect, hand off to the
+      control UI. Kconfig WiFi defaults emptied so provisioning is the
+      default path.
+- [x] `main.c`: branch at boot -- provision when uncredentialed, else run.
+      CONFIG long-press clears credentials and reboots (re-provision).
+- [x] `ui.c`: faithful port of the `ESP32S3BOX3MotorController` 3-tab UI
+      (Move / Jog Control / Status). **Y buttons -> rail jog over WiFi**
+      (hold = continuous), **centre Home -> rail home**. X/Z dial + Move
+      plot kept as pipette-station placeholders (no backend). Status tab
+      shows WiFi (state/SSID/IP/RSSI/MAC) + rail server/position/age.
+- [x] `idf.py build` clean (ESP-IDF v6.0.1, zero warnings)
+- [x] Flash + on-device WiFi setup verified: picked `TP-Link_0624`, got
+      `192.168.1.206`; server URL corrected to the real NUC IP
+      `192.168.1.129:17052` (placeholder was `.16`)
+- [x] **WiFi-only E2E verified on hardware (2026-06-24)**: BOX3 reaches
+      `192.168.1.129:17052`; Y+/Y- jog and Home confirmed via server log
+      (`POST /control/jog/start/{positive,negative}`, `/jog/stop`, 200 OK)
+      and by eye on the rail
+
+> NUC LAN IP is `192.168.1.129` (same host as the hotplate server); host
+> publishes `:17052` to the LAN (alongside ssh `:17040`). The container
+> only sees `172.17.0.2`, so the server URL must be the host LAN IP.
+
+---
+
+## Task 19: integrate the PID controller into the WiFi server
+
+**Date**: 2026-06-24
+
+### Purpose
+
+The WiFi branch was cut from `main`, whose `LinearMotorController.py` uses
+the old fixed-speed-schedule `move_to_mm`. The hardware-verified P
+controller (Issue #11, branch `feature/issue-11-pid-controller`,
+`9dc7b8e`) lives separately. Bring it into the WiFi branch so `server.py`
+drives the rail with PID. No server change is needed: `server.py` only
+calls the driver's public `move_to_mm` / `move_relative_mm`, so swapping
+the driver makes the WiFi path use PID automatically.
+
+### Checklist
+
+- [x] Preserve `feature/issue-11-pid-controller` by pushing it to the fork
+- [x] Bring `LinearMotorController.py` (PID version) into
+      `feature/wifi-fastapi-server` (driver-only; #11's README/ToDo left out)
+- [x] ruff clean + `py_compile` OK
+- [x] **HW-verified through the WiFi server (2026-06-24)**: `POST
+      /control/move {30}` converged to 30.030 mm and `home` to -0.067 mm;
+      server log shows the P-controller loop (speed = kp*error, clamped to
+      output_max=25): iter1 @25 -> iter2 @5 -> iter3 @1, |error| 0.03 mm
