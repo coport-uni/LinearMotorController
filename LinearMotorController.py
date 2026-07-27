@@ -4,10 +4,44 @@ Communicate using the MINAS standard serial protocol
 (ENQ/EOT/ACK/NAK handshaking) at 9600 bps, 8N1.
 """
 
+import re
 import sys
 import time
 
 import serial
+from serial.tools import list_ports
+
+_VIDPID_RE = re.compile(r"^([0-9A-Fa-f]{4}):([0-9A-Fa-f]{4})$")
+
+
+def resolve_port(port: str) -> str:
+    """Resolve a ``"VID:PID"`` string to a ``/dev/ttyUSBn`` path.
+
+    A plain device path is returned unchanged. Device numbering is not
+    stable across USB re-enumeration, so a bench that wires the amp
+    through a known adapter (e.g. a Moxa UPort 1150, ``"110A:1150"``)
+    can name it by VID:PID instead.
+
+    Args:
+        port: A device path, or a ``"VID:PID"`` hex string.
+
+    Returns:
+        The device path to open.
+
+    Raises:
+        RuntimeError: If no connected adapter matches the VID:PID.
+    """
+    match = _VIDPID_RE.match(port.strip())
+    if not match:
+        return port
+    vid = int(match.group(1), 16)
+    pid = int(match.group(2), 16)
+    devices = sorted(
+        p.device for p in list_ports.comports() if p.vid == vid and p.pid == pid
+    )
+    if not devices:
+        raise RuntimeError(f"no serial adapter with VID:PID {port} connected")
+    return devices[0]
 
 
 class PIDController:
@@ -90,9 +124,15 @@ class LinearMotorController:
     pulses_per_mm = 1000
 
     def __init__(self, port: str):
-        """Initialize serial port with 8N1 MINAS standard settings."""
+        """Initialize serial port with 8N1 MINAS standard settings.
+
+        Args:
+            port: A device path, or a ``"VID:PID"`` string resolved by
+                :func:`resolve_port` so the amp survives ttyUSBn
+                renumbering.
+        """
         self.ser = serial.Serial(
-            port=port,
+            port=resolve_port(port),
             baudrate=9600,
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
