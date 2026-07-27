@@ -51,7 +51,7 @@ All HTTP runs on one background task, so requests never overlap.
 ## Configure
 
 ```bash
-cd external/ESP32S3
+cd controller/ESP32S3
 idf.py set-target esp32s3
 idf.py menuconfig    # -> "Rail monitor"
 ```

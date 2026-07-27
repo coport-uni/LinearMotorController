@@ -155,7 +155,7 @@ void loop() {
 ```
 
 The production ESP-BOX-3 firmware lives under
-[`external/ESP32S3/`](../external/ESP32S3/) and uses `esp_http_client` +
+[`controller/ESP32S3/`](../controller/ESP32S3/) and uses `esp_http_client` +
 `cJSON` with a command queue (mirroring HotplateController's
 `hotplate_client.c`); the Arduino sketch above is just a minimal
 illustration.
