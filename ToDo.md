@@ -542,3 +542,65 @@ the driver makes the WiFi path use PID automatically.
       /control/move {30}` converged to 30.030 mm and `home` to -0.067 mm;
       server log shows the P-controller loop (speed = kp*error, clamped to
       output_max=25): iter1 @25 -> iter2 @5 -> iter3 @1, |error| 0.03 mm
+
+---
+
+## Task 20: Repo layout cleanup (Modbus, ESP32S3, docs)
+
+**Date**: 2026-07-27
+**GitHub Issue**: #21 (Scope A refs #6)
+
+### Purpose
+
+Housekeeping over the repository layout, alongside the `pyproject.toml`
+packaging work. Three unrelated pieces of drift, committed separately so
+each stays revertible:
+
+1. The Modbus variant was still in the tree after the project committed
+   to the MINAS standard serial protocol only (`Pr5.37=0`). This is
+   Scope C of Task 9 / #6.
+2. `external/ESP32S3/` was a misleading home for the ESP-BOX-3 firmware
+   from Tasks 17-18 -- nothing in it is external to this project, and
+   the name collides with the convention of `external/` holding
+   third-party or submodule code.
+3. The motor accuracy sheet sat in the repository root under a Korean
+   filename, against the §2 English-only documentation rule.
+
+### Checklist
+
+- [x] Delete `LinearMotorControllerModbus.py` + `Modbus_reference.pdf`
+      (`1e6b105`, `refactor!` -- the module is a breaking removal)
+- [x] Move `external/ESP32S3/` -> `controller/ESP32S3/` (`556d0de`);
+      all 18 files recorded by git as renames, so no firmware was lost
+- [x] Fix the two in-repo paths pointing at the old firmware location:
+      `docs/server_api.md` L158 and `controller/ESP32S3/README.md` L54.
+      L10 of that README still says `external/ESP32S3/` on purpose --
+      it cites **HotplateController's** path, not this repo's
+- [x] Rename `모터별_정확도_측정.xlsx - Sheet1.csv` ->
+      `docs/Motor Movement Accuracy Analysis.xlsx - Sheet1.csv`
+      (`7e7fc5f`); byte-identical, content unchanged
+- [x] Pushed to `main` (`02561f8..7e7fc5f`)
+
+### Verification
+
+- [x] `git grep -ri modbus` clean across code and build config
+      (documentation files still reference it -- see below)
+- [x] `pyproject.toml` `only-include` entries all resolve to existing
+      files; `import LinearMotorController` OK
+- [x] `git show --numstat -M HEAD~1` -- 18 renames, the only content
+      change being the one-line README path fix
+- n/a `ruff check` -- no Python file was modified by this task. The only
+      `.py` in the diff is the **deleted** Modbus module. The 10
+      pre-existing errors in `claude_test/measure_accuracy.py`
+      (E501/W291) are untouched and belong to Task 9 Scope B
+- n/a Hardware run -- nothing here touches `LinearMotorController.py`
+      or `server.py`
+
+### Not done (deliberately)
+
+Task 9 Scope C's documentation half is still open, tracked on #21:
+`CLAUDE.md` L7 ("not Modbus" parenthetical) and the Reference Documents
+rows for the deleted PDF, `LearnedPatterns.md` L22, marking Task 8
+cancelled, and deleting `claude_test/check_input_signals.py`.
+`MinasA6_driver_main.pdf` still awaits the user's confirmation before
+deletion, per Scope C.
