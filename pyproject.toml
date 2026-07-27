@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "linear-motor-controller"
+version = "0.1.0.dev0"
+description = "Python controller for a Panasonic MINAS A6 linear rail (standard serial protocol over RS-485, with a PID closed loop)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "coport-uni" }]
+keywords = ["minas-a6", "panasonic", "servo", "linear-rail", "rs-485"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+]
+dependencies = [
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[project.urls]
+Homepage = "https://github.com/coport-uni/LinearMotorController"
+
+# Flat repo: the driver is a top-level module, imported as
+# `LinearMotorController` (RS485 standard protocol -- the one cell4
+# uses). The ESP32-S3 firmware under `controller/` is not a Python
+# package and is excluded from the wheel.
+[tool.hatch.build.targets.wheel]
+only-include = ["LinearMotorController.py"]
