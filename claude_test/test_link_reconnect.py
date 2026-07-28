@@ -30,6 +30,7 @@ from LinearMotorController import (  # noqa: E402
     LinearMotorController,
     LinkDroppedError,
     MotionStopError,
+    SpeedCommandError,
 )
 
 #: The module, not the class -- they share a name, so aliasing the import
@@ -218,3 +219,89 @@ def test_reconnect_before_motion_does_not_abort_the_move() -> None:
 
     assert result is not None
     assert result.converged is True
+
+
+# ── a move that was never commanded is not a stall ──────────────────
+
+
+def _movable(lmc: LinearMotorController, write_ok: bool) -> list[int]:
+    """Wire up move_relative with a speed write that succeeds or not."""
+    writes: list[int] = []
+
+    def _write(cls: int, num: int, value: int) -> bool:
+        if (cls, num) == (3, 4) and value != 0:
+            writes.append(value)
+            return write_ok
+        return True  # the zero-speed stop always lands here
+
+    lmc._write_parameter = _write
+    lmc._acquire_execution_rights = lambda: True
+    lmc._release_execution_rights = lambda: True
+    lmc.read_feedback_pulse_position = lambda: 0
+    return writes
+
+
+def test_unacknowledged_speed_write_is_not_reported_as_a_stall() -> None:
+    """The bench failure this came from: the rail never moved, and the
+    driver called it 'stalled', which reads as 'the servo fought the
+    load' and sends an operator to the limit switches."""
+    lmc = _controller()
+    _movable(lmc, write_ok=False)
+
+    with pytest.raises(SpeedCommandError):
+        lmc.move_relative(50_000, speed=25, timeout=10.0)
+
+
+def test_a_failed_speed_write_does_not_burn_the_timeout() -> None:
+    """Polling a rail that was never told to move is pure waiting: it
+    turned an instant failure into 36 s on the bench."""
+    lmc = _controller()
+    _movable(lmc, write_ok=False)
+    polls = 0
+
+    def _count() -> int:
+        nonlocal polls
+        polls += 1
+        return 0
+
+    lmc.read_feedback_pulse_position = _count
+
+    with pytest.raises(SpeedCommandError):
+        lmc.move_relative(50_000, speed=25, timeout=10.0)
+    # One read to establish the start position, and no poll loop.
+    assert polls == 1
+
+
+def test_stop_failure_outranks_a_failed_speed_write() -> None:
+    """If both go wrong the operator must hear the one that means the
+    rail might be moving."""
+    lmc = _controller()
+    _movable(lmc, write_ok=False)
+    lmc._stop_motion = lambda: False
+
+    with pytest.raises(MotionStopError):
+        lmc.move_relative(50_000, speed=25, timeout=10.0)
+
+
+def test_an_acknowledged_speed_write_still_moves() -> None:
+    lmc = _controller()
+    writes = _movable(lmc, write_ok=True)
+    lmc._stop_motion = lambda: True
+
+    assert lmc.move_relative(50_000, speed=25, timeout=0.05) == 0
+    # Sign comes from the offset, so a forward move writes +25.
+    assert writes == [25]
+
+
+def test_a_zero_offset_is_treated_as_a_reverse_move() -> None:
+    """Not a bug being asserted as behaviour -- a quirk worth pinning.
+    `direction = 1 if pulse_offset > 0 else -1` makes a zero offset move
+    *backwards* at the given speed. move_to_mm never does this (it
+    returns on tolerance first), but a direct caller would, and would
+    not expect it."""
+    lmc = _controller()
+    writes = _movable(lmc, write_ok=True)
+    lmc._stop_motion = lambda: True
+
+    lmc.move_relative(0, speed=25, timeout=0.05)
+    assert writes == [-25]

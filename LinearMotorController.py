@@ -45,6 +45,16 @@ def resolve_port(port: str) -> str:
     return devices[0]
 
 
+class SpeedCommandError(RuntimeError):
+    """The amp never acknowledged the speed write that starts a move.
+
+    Unlike :class:`MotionStopError`, nothing is moving: the rail was
+    never told to. Its own class because "never started" and "started
+    and did not arrive" send an operator to opposite places, and the
+    driver used to report both as a stall.
+    """
+
+
 class LinkDroppedError(RuntimeError):
     """The USB serial link vanished while the rail was moving.
 
@@ -772,11 +782,18 @@ class LinearMotorController:
             return None
 
         stopped = False
+        speed_written = False
         try:
-            self._write_parameter(3, 4, direction * abs_speed)
-
+            speed_written = self._write_parameter(3, 4, direction * abs_speed)
+            # Do not poll for a move that was never commanded. This
+            # return value used to be discarded, so a lost speed write
+            # became `timeout` seconds of watching a stationary rail,
+            # reported upward as "stalled" — which reads as "the servo
+            # fought the load" and sent a bench day looking at limit
+            # switches. Skipping the wait also turns a 36 s failure into
+            # an immediate one.
             start_time = time.time()
-            while time.time() - start_time < timeout:
+            while speed_written and time.time() - start_time < timeout:
                 current = self.read_feedback_pulse_position()
                 if current is None:
                     break
@@ -801,6 +818,16 @@ class LinearMotorController:
                 f"{self.stop_attempts} attempts. THE RAIL MAY STILL BE "
                 f"MOVING at {direction * abs_speed} r/min — use the "
                 f"physical e-stop."
+            )
+        # Checked after the stop, so the more serious condition wins if
+        # both went wrong. A rail that was never commanded is not moving,
+        # which is why this is the lesser of the two.
+        if not speed_written:
+            raise SpeedCommandError(
+                f"the amp did not acknowledge the speed command "
+                f"({direction * abs_speed} r/min), so the rail was never "
+                f"told to move. It has not left "
+                f"{start_pos / self.pulses_per_mm} mm."
             )
 
         time.sleep(2)
