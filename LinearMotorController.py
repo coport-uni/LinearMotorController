@@ -167,19 +167,30 @@ class LinearMotorController:
     read_retry_attempts = 3
     retry_backoff_s = 0.05
 
-    # Per-attempt budget for one handshake. A whole exchange normally
-    # completes in ~26 ms (a 24-byte reply at 9600 bps is ~25 ms), so
-    # 300 ms is ten times the honest cost of a good read and still far
-    # below anything a caller waits on.
+    # Per-attempt budget for one handshake.
     #
-    # This bounds the retry budget, which is the point. The port opens
-    # with a 2 s timeout; leaving the handshake on it meant three failed
-    # attempts cost over six seconds, and a plain GET /v1/status blew a
-    # scenario's 5 s step timeout the first time three reads missed in a
-    # row. It also bounds how long move_relative's poll loop is blind
-    # while the rail is moving, which is what the per-iteration overshoot
-    # is made of.
-    exchange_timeout_s = 0.3
+    # 2.0 s looks absurd next to a ~27 ms median exchange, and shortening
+    # it to 0.3 s -- ten times that median -- was tried and measured on
+    # the bench. It made things far worse, not better:
+    #
+    #     budget   success   median
+    #     2.0 s     60/60     27 ms
+    #     0.3 s     28/60   1002 ms
+    #
+    # A median of 1002 ms at 0.3 s means nearly every read burned all
+    # three attempts. Aborting a handshake part-way leaves this
+    # half-duplex bus out of step, and the next attempt then fails on the
+    # wreckage of the last, so a tight budget is self-reinforcing. The
+    # arithmetic ("10x the median must be plenty") does not survive
+    # contact with the protocol.
+    #
+    # Keep the generous budget. The worst case that matters is not 3 x
+    # 2 s: with a healthy adapter the measured maximum was 2078 ms, i.e.
+    # one slow attempt followed by a good one. Six seconds only appeared
+    # while the USB adapter was failing, and no timeout tuning fixes a
+    # dying adapter. Callers that cannot wait should lower `attempts`,
+    # not this.
+    exchange_timeout_s = 2.0
 
     # Attempts allowed for the zero-speed (stop) write. Higher than the
     # read budget on purpose: a read that never lands costs a retry, a

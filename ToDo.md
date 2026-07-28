@@ -802,3 +802,36 @@ correcting an earlier reading of mine: the three consecutive EOT misses
 above looked like retry latency alone, but three in a row is ~0.1% by
 chance at the measured ~10% single-read failure rate — the adapter was
 already degrading when that run started.
+
+### Correction — 0.3 s was wrong; measurement reversed it
+
+The 0.3 s budget above was reasoned from arithmetic ("10x the 27 ms
+median must be plenty") and never measured against the amp, because the
+adapter was faulted when it was written. Measured as soon as the adapter
+came back, over 60 reads each:
+
+```
+budget   success   median
+2.0 s     60/60      27 ms
+0.3 s     28/60    1002 ms
+```
+
+- [x] **Reverted `exchange_timeout_s` to 2.0.** A 1002 ms median at
+      0.3 s means nearly every read burned all three attempts. Aborting a
+      handshake part-way leaves this half-duplex bus out of step and the
+      next attempt fails on the wreckage of the last, so a tight budget
+      is self-reinforcing rather than self-correcting.
+- [x] Kept the plumbing: the budget is now an explicit, documented,
+      tunable class attribute with a `finally` that restores the port
+      timeout, and the measurement is recorded beside it so the next
+      person does not repeat the experiment.
+- [x] **Fixed the actual mismatch in the scenarios instead.** The
+      complaint was never the driver: with a healthy adapter the measured
+      worst case is 2078 ms — one slow attempt then a good one — and the
+      six-second case only appeared while the USB adapter was dying. The
+      `status` steps' `timeout_s: 5.0` was simply too tight for a read
+      that reaches an amp over RS485. Raised to 15 s in all three
+      scenarios, with the measurement quoted in each.
+- [x] Re-verified: ruff clean, parent suite 32 pass, all three scenarios
+      parse, and the timeout plumbing still bounds and restores correctly
+      at the 2.0 s budget.
