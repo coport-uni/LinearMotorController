@@ -671,3 +671,44 @@ bare float on *every* exit path, so "converged at 0.0" and "gave up at
 - [ ] Re-run the full motion scenario to confirm the return leg now
       converges (operator-gated; the run needs a console confirmation)
 - [ ] Push branch, open PR per §15.2 — blocked on the same credentials
+
+---
+
+## 2026-07-28 — Retry and verify the stop command
+
+Found while diagnosing why a 50 mm move oscillated and stalled at
+48.592 mm. The per-iteration log showed corrections travelling far
+further than commanded — `move +1.408 mm @ speed 6` moved **13.0 mm**.
+
+### Root cause
+`move_relative`'s `finally` block called
+`self._write_parameter(3, 4, 0)` and **discarded the return value**.
+`_write_parameter` returns `False` on a failed RS485 exchange, so at the
+bench's error rate the stop silently did not happen and the rail kept
+running at the commanded speed until some later call wrote a different
+one.
+
+Measured on the real amp: a single-shot zero-speed write succeeded
+**28 times in 30** — roughly one stop in fifteen was being lost.
+
+An earlier note in this file claimed writes must never be retried
+because they are not idempotent. That is right for positioning writes
+and wrong for this one: **writing speed 0 twice is identical to writing
+it once**, and it is the write whose failure matters most.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] Add `_stop_motion()`: retries the zero-speed write up to
+      `stop_attempts` (5) and reports whether the amp acknowledged
+- [x] `move_relative` now raises `MotionStopError` when the stop cannot
+      be confirmed, instead of returning normally as if it had stopped
+- [x] Keep every other write single-shot — the idempotency argument
+      still holds for them
+- [x] `ruff check` + `ruff format --check` pass
+- [x] **Hardware-verified**: single-shot stop 28/30; `_stop_motion`
+      **30/30**; rail position unchanged (0.175 → 0.175 mm) across 60
+      zero-speed writes, confirming the write is idempotent
+- [ ] Create GitHub issue — operator has now run `gh auth login`; file
+      this together with the two earlier entries
+- [ ] Re-run the 50 mm scenario to confirm the oscillation is gone
+      (operator-gated)

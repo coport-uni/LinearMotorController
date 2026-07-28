@@ -45,6 +45,16 @@ def resolve_port(port: str) -> str:
     return devices[0]
 
 
+class MotionStopError(RuntimeError):
+    """The amp never acknowledged a command to stop the rail.
+
+    Raised when every attempt to write zero speed failed. The rail's
+    motion state is then unknown and possibly ongoing; this is an
+    operator-level emergency, not a retryable software fault, which is
+    why it is an exception rather than a return value.
+    """
+
+
 @dataclass(frozen=True)
 class MoveResult:
     """Outcome of an absolute move: where it stopped, and did it arrive.
@@ -156,6 +166,12 @@ class LinearMotorController:
     # _send_and_receive.
     read_retry_attempts = 3
     retry_backoff_s = 0.05
+
+    # Attempts allowed for the zero-speed (stop) write. Higher than the
+    # read budget on purpose: a read that never lands costs a retry, a
+    # stop that never lands leaves the rail moving. See _stop_motion for
+    # why this write, alone among the writes, may be repeated.
+    stop_attempts = 5
 
     def __init__(self, port: str):
         """Initialize serial port with 8N1 MINAS standard settings.
@@ -508,6 +524,28 @@ class LinearMotorController:
 
         return None
 
+    def _stop_motion(self) -> bool:
+        """Command zero speed, retrying until the amp acknowledges.
+
+        This is the one write that must be retried. Every other
+        parameter write is left single-shot because re-sending it could
+        apply an action twice, but **writing speed 0 is idempotent** --
+        repeating it cannot move the rail, only stop it again. And it is
+        the write that matters most: at the measured ~10% RS485 failure
+        rate, an unchecked single attempt leaves the rail running at
+        speed roughly one stop in ten, until some later call happens to
+        write a different speed. `move_relative` ignored this return
+        value entirely, which is how a 1.4 mm correction travelled
+        13 mm on the bench.
+
+        Returns:
+            True if the amp acknowledged a zero-speed write.
+        """
+        for _ in range(self.stop_attempts):
+            if self._write_parameter(3, 4, 0):
+                return True
+        return False
+
     def move_relative(
         self,
         pulse_offset: int,
@@ -543,6 +581,7 @@ class LinearMotorController:
         if not self._acquire_execution_rights():
             return None
 
+        stopped = False
         try:
             self._write_parameter(3, 4, direction * abs_speed)
 
@@ -563,8 +602,16 @@ class LinearMotorController:
             # Always stop and release, even on exceptions or Ctrl+C,
             # so a KeyboardInterrupt does not leave Pr3.04 commanding
             # motion after the script exits.
-            self._write_parameter(3, 4, 0)
+            stopped = self._stop_motion()
             self._release_execution_rights()
+
+        if not stopped:
+            raise MotionStopError(
+                f"the amp did not acknowledge the zero-speed write after "
+                f"{self.stop_attempts} attempts. THE RAIL MAY STILL BE "
+                f"MOVING at {direction * abs_speed} r/min — use the "
+                f"physical e-stop."
+            )
 
         time.sleep(2)
         final = self.read_feedback_pulse_position()
