@@ -45,6 +45,16 @@ def resolve_port(port: str) -> str:
     return devices[0]
 
 
+class LinkDroppedError(RuntimeError):
+    """The USB serial link vanished while the rail was moving.
+
+    Distinct from :class:`MotionStopError`: here the amp *was*
+    successfully told to stop after the link came back. The move is
+    still a failure -- the rail travelled an unknown distance while
+    nobody could read it -- but it is not an emergency.
+    """
+
+
 class MotionStopError(RuntimeError):
     """The amp never acknowledged a command to stop the rail.
 
@@ -198,6 +208,21 @@ class LinearMotorController:
     # why this write, alone among the writes, may be repeated.
     stop_attempts = 5
 
+    # How long to keep trying to open the port before giving up, when
+    # the adapter is re-enumerating rather than absent.
+    #
+    # On a bench where the amp radiates into its own RS485 link, the
+    # adapter drops off USB and returns under a new ttyUSBn every few
+    # seconds. resolve_port() then raises "no serial adapter with
+    # VID:PID ... connected" purely because it looked during a gap: the
+    # cell server failed to start on 3 of 4 consecutive attempts that
+    # way, each failure needing a manual restart. Waiting out the gap
+    # is not papering over the fault -- the fault is loud elsewhere
+    # (diagnose reports it, every read reports it); this only stops a
+    # transient absence from being mistaken for a missing device.
+    open_retry_attempts = 20
+    open_retry_delay_s = 0.5
+
     def __init__(self, port: str):
         """Initialize serial port with 8N1 MINAS standard settings.
 
@@ -205,21 +230,83 @@ class LinearMotorController:
             port: A device path, or a ``"VID:PID"`` string resolved by
                 :func:`resolve_port` so the amp survives ttyUSBn
                 renumbering.
+
+        Raises:
+            RuntimeError: If the adapter never appeared within
+                ``open_retry_attempts``.
         """
-        self.ser = serial.Serial(
-            port=resolve_port(port),
-            baudrate=9600,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=2,
-        )
+        self._port_spec = port
+        #: Bumped on every successful reopen. Callers that must not
+        #: straddle a reconnect (motion) compare this before and after.
+        self.link_generation = 0
+        self.ser = self._open_serial()
         self.id = 1
 
         self.ENQ = 0x05  # Enquiry
         self.EOT = 0x04  # End of transmission
         self.ACK = 0x06  # Acknowledgement
         self.NAK = 0x15  # Negative acknowledgement
+
+    def _open_serial(self) -> serial.Serial:
+        """Open the amp's port, waiting out a re-enumeration gap.
+
+        Returns:
+            The open port.
+
+        Raises:
+            RuntimeError: If the adapter did not appear in time. The
+                message carries the last underlying error, because
+                "absent" and "present but unopenable" call for
+                different bench actions.
+        """
+        last_error: Exception | None = None
+        for attempt in range(self.open_retry_attempts):
+            try:
+                return serial.Serial(
+                    port=resolve_port(self._port_spec),
+                    baudrate=9600,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=2,
+                )
+            except (OSError, RuntimeError) as exc:
+                last_error = exc
+                if attempt + 1 < self.open_retry_attempts:
+                    time.sleep(self.open_retry_delay_s)
+        waited = self.open_retry_attempts * self.open_retry_delay_s
+        raise RuntimeError(
+            f"could not open the amp on {self._port_spec} within "
+            f"{waited:.0f}s: {last_error}"
+        )
+
+    def _reopen(self) -> bool:
+        """Re-resolve and reopen the port after the link dropped.
+
+        The adapter comes back under a *different* ``ttyUSBn``, and the
+        old file descriptor outlives the device it named -- reads on it
+        fail with ``EIO`` forever, so without this every call after one
+        drop fails identically until the process restarts.
+
+        Reopening is safe for reads and for the stop write. It is NOT
+        safe to resume a move across one: see :meth:`move_to_mm`, which
+        watches :attr:`link_generation` for exactly that reason.
+
+        Returns:
+            True if the port was reopened.
+        """
+        try:
+            self.ser.close()
+        except OSError:
+            pass  # Already gone; closing was only best-effort.
+        try:
+            self.ser = self._open_serial()
+        except RuntimeError as exc:
+            print(f" Link down, could not reopen: {exc}")
+            return False
+        self.link_generation += 1
+        print(f" Link reopened (generation {self.link_generation}).")
+        return True
 
     def _build_command(
         self, command: int, mode: int, params: bytes = b""
@@ -299,12 +386,23 @@ class LinearMotorController:
         the port's own timeout, so one attempt costs a bounded amount of
         time and ``_send_and_receive`` can afford to retry.
         """
-        saved_timeout = self.ser.timeout
-        self.ser.timeout = self.exchange_timeout_s
         try:
-            return self._handshake(block)
-        finally:
-            self.ser.timeout = saved_timeout
+            saved_timeout = self.ser.timeout
+            self.ser.timeout = self.exchange_timeout_s
+            try:
+                return self._handshake(block)
+            finally:
+                self.ser.timeout = saved_timeout
+        except (OSError, serial.SerialException) as exc:
+            # An OS-level error here is the device, not the protocol: the
+            # node was deleted under us by a re-enumeration. Note the
+            # timeout assignment above is inside the try on purpose --
+            # it calls tcsetattr, so on a vanished node it is usually the
+            # *first* thing to raise, which made this look like a driver
+            # bug rather than a missing device.
+            print(f" RS485 link error ({exc}); attempting to reopen.")
+            self._reopen()
+            return None
 
     def _handshake(self, block: bytes) -> bytes | None:
         """The handshake itself; see :meth:`_exchange` for the timeout."""
@@ -607,6 +705,37 @@ class LinearMotorController:
                 return True
         return False
 
+    def _abort_if_link_dropped(self, link_at_start: int) -> None:
+        """Stop the rail if the link reconnected mid-move.
+
+        A reconnect means some window of the move happened with nobody
+        able to read the rail or command it. Whatever the loop believes
+        about position is from before that window, so the move cannot be
+        continued -- the speed command is still latched in the amp and
+        the rail may well still be travelling.
+
+        Args:
+            link_at_start: :attr:`link_generation` sampled before the
+                move began.
+
+        Raises:
+            MotionStopError: If the rail could not be stopped. The rail
+                may still be moving; this is an operator emergency.
+            LinkDroppedError: If it was stopped. The move failed, but
+                the rail is known to be stationary.
+        """
+        if self.link_generation == link_at_start:
+            return
+        if not self._stop_motion():
+            raise MotionStopError(
+                "the RS485 link dropped mid-move and the rail could not "
+                "be stopped afterwards; its motion state is unknown"
+            )
+        raise LinkDroppedError(
+            "the RS485 link dropped mid-move; the rail was stopped, but "
+            "it travelled an unknown distance while the link was down"
+        )
+
     def move_relative(
         self,
         pulse_offset: int,
@@ -793,6 +922,10 @@ class LinearMotorController:
         current_mm = self.read_position_mm()
         if current_mm is None:
             return None
+        # Sampled *after* the first read, so a reconnect that happened
+        # while merely establishing position does not count as one
+        # during the move -- nothing was in motion yet.
+        link_at_start = self.link_generation
 
         error_mm = target_mm - current_mm
         print(
@@ -829,11 +962,16 @@ class LinearMotorController:
                 tolerance_mm=tolerance_mm,
                 timeout=timeout_per_step,
             )
+            # Checked before the result is inspected: if the link
+            # dropped, `result` describes the world from before the gap
+            # and must not be believed.
+            self._abort_if_link_dropped(link_at_start)
             if result is None:
                 print(f"  iter {iteration + 1}: move_relative_mm failed.")
                 return None
 
             current_mm = self.read_position_mm()
+            self._abort_if_link_dropped(link_at_start)
             if current_mm is None:
                 return None
             error_mm = target_mm - current_mm
