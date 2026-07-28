@@ -123,6 +123,15 @@ class LinearMotorController:
     # Adjust after empirical calibration if needed.
     pulses_per_mm = 1000
 
+    # Retry budget for read-only RS485 commands. Measured on the bench,
+    # a single handshake fails about one time in ten while the rail is
+    # otherwise healthy; three attempts take that below one in a
+    # thousand, which matters because move_to_mm reads the position on
+    # every loop iteration. Never applied to writes -- see
+    # _send_and_receive.
+    read_retry_attempts = 3
+    retry_backoff_s = 0.05
+
     def __init__(self, port: str):
         """Initialize serial port with 8N1 MINAS standard settings.
 
@@ -172,16 +181,44 @@ class LinearMotorController:
 
         return params, error_code
 
-    def _send_and_receive(self, block: bytes) -> bytes | None:
+    def _send_and_receive(
+        self, block: bytes, attempts: int = 1
+    ) -> bytes | None:
         """Send a command block and return the response block.
 
-        Execute the RS485 handshake sequence:
+        A single handshake fails intermittently on this bench -- roughly
+        one read in ten returns None with the rail otherwise healthy, and
+        because move_to_mm closes its loop on read_position_mm, one lost
+        read used to abort a whole move. Read-only callers therefore pass
+        ``attempts=self.read_retry_attempts``.
+
+        Args:
+            block: The framed data block from ``_build_command``.
+            attempts: How many times to run the handshake before giving
+                up. **Leave at 1 for any command that changes amp state**
+                -- parameter writes and execution-rights acquire/release
+                are not idempotent, and re-sending one could apply the
+                action twice. Only reads may be retried.
+
+        Returns:
+            The raw response bytes, or None if every attempt failed.
+        """
+        for attempt in range(attempts):
+            response = self._exchange(block)
+            if response is not None:
+                return response
+            if attempt + 1 < attempts:
+                time.sleep(self.retry_backoff_s)
+        return None
+
+    def _exchange(self, block: bytes) -> bytes | None:
+        """Run one RS485 handshake; return the response or None.
+
+        Execute the handshake sequence:
             1) host->amp: module_byte+ENQ, amp->host: EOT
             2) host->amp: data block,      amp->host: ACK+ENQ
             3) host->amp: module_byte+EOT, amp->host: response
             4) host->amp: ACK
-
-        Return the raw response bytes, or None on failure.
         """
         module_byte = 0x80 | (self.id & 0x7F)
         self.ser.reset_input_buffer()
@@ -279,7 +316,9 @@ class LinearMotorController:
         two bytes: high=X0h, low=YZh -> "Ver.X.0YZ".
         """
         block = self._build_command(command=0, mode=1)
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
 
         if response is None:
             return None
@@ -307,7 +346,9 @@ class LinearMotorController:
         Use command=0, mode=5 (amp model).
         """
         block = self._build_command(command=0, mode=5)
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return None
 
@@ -334,7 +375,9 @@ class LinearMotorController:
         reverse, positive for forward.
         """
         block = self._build_command(command=2, mode=2)
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return None
 
@@ -421,7 +464,9 @@ class LinearMotorController:
         """
         param_data = bytes([category, number])
         block = self._build_command(command=7, mode=0, params=param_data)
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return None
 

@@ -604,3 +604,36 @@ rows for the deleted PDF, `LearnedPatterns.md` L22, marking Task 8
 cancelled, and deleting `claude_test/check_input_signals.py`.
 `MinasA6_driver_main.pdf` still awaits the user's confirmation before
 deletion, per Scope C.
+
+---
+
+## 2026-07-28 — Retry read-only RS485 commands
+
+Found while bringing up cell4 of the downstream InnoCORESDL project on
+real hardware. A single MINAS handshake fails intermittently: sampling
+the rail position through the cell server returned `None` **2 times in
+20** (10%) with the rail otherwise healthy and no USB disconnects in the
+kernel log. Because `move_to_mm` closes its loop on `read_position_mm`
+every iteration, one lost read aborted an entire move — the first
+operator-gated motion run failed part way through for this reason.
+
+### Work items
+- [x] Append this ToDo entry
+- [ ] Create GitHub issue — **blocked**: no GitHub credentials on this
+      host (`git push` fails with `could not read Username`)
+- [x] Cut working branch `fix/rs485-read-retry`
+- [x] Split the handshake out of `_send_and_receive` into `_exchange`,
+      and make `_send_and_receive(block, attempts=1)` loop over it with
+      a `retry_backoff_s` pause between tries
+- [x] Apply `attempts=read_retry_attempts` (3) to the **four read-only**
+      call sites only: `read_software_version`, `read_model_name`,
+      `read_feedback_pulse_position`, `_read_parameter`
+- [x] Deliberately leave `_acquire_execution_rights`,
+      `_release_execution_rights` and `_write_parameter` single-shot —
+      they are not idempotent, and re-sending one could apply a motion
+      or parameter change twice. The default `attempts=1` preserves
+      their existing behaviour exactly.
+- [x] `ruff check` + `ruff format --check` pass
+- [x] **Hardware-verified**: 30 consecutive position reads through the
+      cell server, **0 failures** (was 2/20 before the change)
+- [ ] Push branch, open PR per §15.2 — blocked on the same credentials
