@@ -167,6 +167,20 @@ class LinearMotorController:
     read_retry_attempts = 3
     retry_backoff_s = 0.05
 
+    # Per-attempt budget for one handshake. A whole exchange normally
+    # completes in ~26 ms (a 24-byte reply at 9600 bps is ~25 ms), so
+    # 300 ms is ten times the honest cost of a good read and still far
+    # below anything a caller waits on.
+    #
+    # This bounds the retry budget, which is the point. The port opens
+    # with a 2 s timeout; leaving the handshake on it meant three failed
+    # attempts cost over six seconds, and a plain GET /v1/status blew a
+    # scenario's 5 s step timeout the first time three reads missed in a
+    # row. It also bounds how long move_relative's poll loop is blind
+    # while the rail is moving, which is what the per-iteration overshoot
+    # is made of.
+    exchange_timeout_s = 0.3
+
     # Attempts allowed for the zero-speed (stop) write. Higher than the
     # read budget on purpose: a read that never lands costs a retry, a
     # stop that never lands leaves the rail moving. See _stop_motion for
@@ -269,7 +283,20 @@ class LinearMotorController:
             2) host->amp: data block,      amp->host: ACK+ENQ
             3) host->amp: module_byte+EOT, amp->host: response
             4) host->amp: ACK
+
+        Every wait here is bounded by ``exchange_timeout_s`` rather than
+        the port's own timeout, so one attempt costs a bounded amount of
+        time and ``_send_and_receive`` can afford to retry.
         """
+        saved_timeout = self.ser.timeout
+        self.ser.timeout = self.exchange_timeout_s
+        try:
+            return self._handshake(block)
+        finally:
+            self.ser.timeout = saved_timeout
+
+    def _handshake(self, block: bytes) -> bytes | None:
+        """The handshake itself; see :meth:`_exchange` for the timeout."""
         module_byte = 0x80 | (self.id & 0x7F)
         self.ser.reset_input_buffer()
         self.ser.write(bytes([module_byte, self.ENQ]))
@@ -277,7 +304,7 @@ class LinearMotorController:
         start = time.time()
         eot_received = False
 
-        while time.time() - start < 2:
+        while time.time() - start < self.exchange_timeout_s:
             data = self.ser.read(1)
 
             if data and data[0] == self.EOT:
@@ -312,7 +339,7 @@ class LinearMotorController:
         if not enq_received:
             start = time.time()
 
-            while time.time() - start < 2:
+            while time.time() - start < self.exchange_timeout_s:
                 data = self.ser.read(1)
 
                 if data and data[0] == self.ENQ:

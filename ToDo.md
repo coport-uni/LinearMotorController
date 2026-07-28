@@ -750,3 +750,55 @@ is by *what re-sending actually does*, not by the read/write label.
       operations are motion-free.
 - [x] Parent suite still green: `pytest` 32 pass, 5/5 cell contract cases
 - [ ] Confirm on a full 50 mm round trip (operator-gated)
+
+---
+
+## 2026-07-28 — Bound one handshake attempt (exchange_timeout_s)
+
+The retry added earlier raised reliability without bounding latency, and
+the first scenario run to reach the balance died on its **first** step:
+
+```
+No EOT response from amplifier.     <- attempt 1 (2 s)
+No EOT response from amplifier.     <- attempt 2 (2 s)
+No EOT response from amplifier.     <- attempt 3 (2 s)
+cell4 GET status timed out after 5.0s
+```
+
+Three attempts at the port's 2 s timeout is over six seconds, so a plain
+`GET /v1/status` could exceed a scenario's 5 s step timeout. Retrying was
+right; leaving each attempt on a 2 s budget was not.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] Add `exchange_timeout_s = 0.3`. A whole exchange normally costs
+      ~26 ms (a 24-byte reply at 9600 bps is ~25 ms), so this is ten
+      times the honest cost of a good read.
+- [x] Split the handshake into `_handshake`; `_exchange` now sets the
+      port timeout to the budget and restores it in a `finally`, and both
+      EOT/ENQ wait loops use the budget instead of a hardcoded 2 s
+- [x] `ruff check` + `ruff format --check` pass; parent suite still
+      32 pass
+- [x] **Verified without hardware** (the rail adapter is in an EPROTO
+      fault, see below): one attempt bounded at 0.31 s; the handshake
+      uses the short timeout; the original is restored, including on the
+      exception path; **three attempts total 1.02 s, down from 6 s+** —
+      which is the specific failure above, fixed.
+- [ ] **Not yet measured on hardware**: the success rate at a 0.3 s
+      budget, and whether it shrinks `move_relative`'s poll-loop blind
+      window enough to reduce the per-iteration overshoot. 0.3 s is ten
+      times the median read, but that is arithmetic, not a measurement.
+- [ ] Push branch, open PR (issue #23 covers this work)
+
+### Bench note — the adapter, not the software
+
+The Moxa UPort 1150 failed **four times today**, each time needing a
+physical re-plug and recurring within minutes. Kernel logs ~20,000
+`urb status -71` (EPROTO) per minute while it is faulted, and once wedged
+the port cannot even be opened (`ti_open - cannot send open command,
+-71`). The balance on the same bus is unaffected throughout, so this is
+the adapter or its cabling, not the bus and not this driver. Worth
+correcting an earlier reading of mine: the three consecutive EOT misses
+above looked like retry latency alone, but three in a row is ~0.1% by
+chance at the measured ~10% single-read failure rate — the adapter was
+already degrading when that run started.
