@@ -7,6 +7,7 @@ Communicate using the MINAS standard serial protocol
 import re
 import sys
 import time
+from dataclasses import dataclass
 
 import serial
 from serial.tools import list_ports
@@ -42,6 +43,60 @@ def resolve_port(port: str) -> str:
     if not devices:
         raise RuntimeError(f"no serial adapter with VID:PID {port} connected")
     return devices[0]
+
+
+class SpeedCommandError(RuntimeError):
+    """The amp never acknowledged the speed write that starts a move.
+
+    Unlike :class:`MotionStopError`, nothing is moving: the rail was
+    never told to. Its own class because "never started" and "started
+    and did not arrive" send an operator to opposite places, and the
+    driver used to report both as a stall.
+    """
+
+
+class LinkDroppedError(RuntimeError):
+    """The USB serial link vanished while the rail was moving.
+
+    Distinct from :class:`MotionStopError`: here the amp *was*
+    successfully told to stop after the link came back. The move is
+    still a failure -- the rail travelled an unknown distance while
+    nobody could read it -- but it is not an emergency.
+    """
+
+
+class MotionStopError(RuntimeError):
+    """The amp never acknowledged a command to stop the rail.
+
+    Raised when every attempt to write zero speed failed. The rail's
+    motion state is then unknown and possibly ongoing; this is an
+    operator-level emergency, not a retryable software fault, which is
+    why it is an exception rather than a return value.
+    """
+
+
+@dataclass(frozen=True)
+class MoveResult:
+    """Outcome of an absolute move: where it stopped, and did it arrive.
+
+    ``move_to_mm`` used to return a bare float whether it converged or
+    gave up, so callers could not tell a completed move from an
+    abandoned one and reported both as success. Splitting the answer in
+    two makes the distinction impossible to overlook.
+
+    Attributes:
+        position_mm: The last position actually read from the amp.
+        converged: True only if ``position_mm`` is within the caller's
+            tolerance of the commanded target. Check this before
+            treating the move as done.
+        reason: Why the loop finished -- ``"converged"``,
+            ``"already_in_tolerance"``, ``"stalled"``, ``"deadband"``
+            or ``"iteration_cap"``. For logging and diagnosis.
+    """
+
+    position_mm: float
+    converged: bool
+    reason: str
 
 
 class PIDController:
@@ -123,6 +178,61 @@ class LinearMotorController:
     # Adjust after empirical calibration if needed.
     pulses_per_mm = 1000
 
+    # Retry budget for read-only RS485 commands. Measured on the bench,
+    # a single handshake fails about one time in ten while the rail is
+    # otherwise healthy; three attempts take that below one in a
+    # thousand, which matters because move_to_mm reads the position on
+    # every loop iteration. Never applied to writes -- see
+    # _send_and_receive.
+    read_retry_attempts = 3
+    retry_backoff_s = 0.05
+
+    # Per-attempt budget for one handshake.
+    #
+    # 2.0 s looks absurd next to a ~27 ms median exchange, and shortening
+    # it to 0.3 s -- ten times that median -- was tried and measured on
+    # the bench. It made things far worse, not better:
+    #
+    #     budget   success   median
+    #     2.0 s     60/60     27 ms
+    #     0.3 s     28/60   1002 ms
+    #
+    # A median of 1002 ms at 0.3 s means nearly every read burned all
+    # three attempts. Aborting a handshake part-way leaves this
+    # half-duplex bus out of step, and the next attempt then fails on the
+    # wreckage of the last, so a tight budget is self-reinforcing. The
+    # arithmetic ("10x the median must be plenty") does not survive
+    # contact with the protocol.
+    #
+    # Keep the generous budget. The worst case that matters is not 3 x
+    # 2 s: with a healthy adapter the measured maximum was 2078 ms, i.e.
+    # one slow attempt followed by a good one. Six seconds only appeared
+    # while the USB adapter was failing, and no timeout tuning fixes a
+    # dying adapter. Callers that cannot wait should lower `attempts`,
+    # not this.
+    exchange_timeout_s = 2.0
+
+    # Attempts allowed for the zero-speed (stop) write. Higher than the
+    # read budget on purpose: a read that never lands costs a retry, a
+    # stop that never lands leaves the rail moving. See _stop_motion for
+    # why this write, alone among the writes, may be repeated.
+    stop_attempts = 5
+
+    # How long to keep trying to open the port before giving up, when
+    # the adapter is re-enumerating rather than absent.
+    #
+    # On a bench where the amp radiates into its own RS485 link, the
+    # adapter drops off USB and returns under a new ttyUSBn every few
+    # seconds. resolve_port() then raises "no serial adapter with
+    # VID:PID ... connected" purely because it looked during a gap: the
+    # cell server failed to start on 3 of 4 consecutive attempts that
+    # way, each failure needing a manual restart. Waiting out the gap
+    # is not papering over the fault -- the fault is loud elsewhere
+    # (diagnose reports it, every read reports it); this only stops a
+    # transient absence from being mistaken for a missing device.
+    open_retry_attempts = 20
+    open_retry_delay_s = 0.5
+
     def __init__(self, port: str):
         """Initialize serial port with 8N1 MINAS standard settings.
 
@@ -130,21 +240,83 @@ class LinearMotorController:
             port: A device path, or a ``"VID:PID"`` string resolved by
                 :func:`resolve_port` so the amp survives ttyUSBn
                 renumbering.
+
+        Raises:
+            RuntimeError: If the adapter never appeared within
+                ``open_retry_attempts``.
         """
-        self.ser = serial.Serial(
-            port=resolve_port(port),
-            baudrate=9600,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=2,
-        )
+        self._port_spec = port
+        #: Bumped on every successful reopen. Callers that must not
+        #: straddle a reconnect (motion) compare this before and after.
+        self.link_generation = 0
+        self.ser = self._open_serial()
         self.id = 1
 
         self.ENQ = 0x05  # Enquiry
         self.EOT = 0x04  # End of transmission
         self.ACK = 0x06  # Acknowledgement
         self.NAK = 0x15  # Negative acknowledgement
+
+    def _open_serial(self) -> serial.Serial:
+        """Open the amp's port, waiting out a re-enumeration gap.
+
+        Returns:
+            The open port.
+
+        Raises:
+            RuntimeError: If the adapter did not appear in time. The
+                message carries the last underlying error, because
+                "absent" and "present but unopenable" call for
+                different bench actions.
+        """
+        last_error: Exception | None = None
+        for attempt in range(self.open_retry_attempts):
+            try:
+                return serial.Serial(
+                    port=resolve_port(self._port_spec),
+                    baudrate=9600,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=2,
+                )
+            except (OSError, RuntimeError) as exc:
+                last_error = exc
+                if attempt + 1 < self.open_retry_attempts:
+                    time.sleep(self.open_retry_delay_s)
+        waited = self.open_retry_attempts * self.open_retry_delay_s
+        raise RuntimeError(
+            f"could not open the amp on {self._port_spec} within "
+            f"{waited:.0f}s: {last_error}"
+        )
+
+    def _reopen(self) -> bool:
+        """Re-resolve and reopen the port after the link dropped.
+
+        The adapter comes back under a *different* ``ttyUSBn``, and the
+        old file descriptor outlives the device it named -- reads on it
+        fail with ``EIO`` forever, so without this every call after one
+        drop fails identically until the process restarts.
+
+        Reopening is safe for reads and for the stop write. It is NOT
+        safe to resume a move across one: see :meth:`move_to_mm`, which
+        watches :attr:`link_generation` for exactly that reason.
+
+        Returns:
+            True if the port was reopened.
+        """
+        try:
+            self.ser.close()
+        except OSError:
+            pass  # Already gone; closing was only best-effort.
+        try:
+            self.ser = self._open_serial()
+        except RuntimeError as exc:
+            print(f" Link down, could not reopen: {exc}")
+            return False
+        self.link_generation += 1
+        print(f" Link reopened (generation {self.link_generation}).")
+        return True
 
     def _build_command(
         self, command: int, mode: int, params: bytes = b""
@@ -172,17 +344,78 @@ class LinearMotorController:
 
         return params, error_code
 
-    def _send_and_receive(self, block: bytes) -> bytes | None:
+    def _send_and_receive(
+        self, block: bytes, attempts: int = 1
+    ) -> bytes | None:
         """Send a command block and return the response block.
 
-        Execute the RS485 handshake sequence:
+        A single handshake fails intermittently on this bench -- roughly
+        one read in ten returns None with the rail otherwise healthy, and
+        because move_to_mm closes its loop on read_position_mm, one lost
+        read used to abort a whole move. Read-only callers therefore pass
+        ``attempts=self.read_retry_attempts``.
+
+        Args:
+            block: The framed data block from ``_build_command``.
+            attempts: How many times to run the handshake before giving
+                up. Choose it by **what re-sending actually does**, not
+                by whether the command is nominally a read or a write:
+
+                * Position and identity reads, and the execution-rights
+                  acquire/release, are all safe to repeat -- they move
+                  nothing, and doing them twice leaves the amp exactly
+                  as doing them once would.
+                * The zero-speed stop is likewise safe, and is retried
+                  harder still; see :meth:`_stop_motion`.
+                * A speed write (``Pr3.04``) keeps ``attempts=1``. It is
+                  the one command whose re-send starts motion, so a lost
+                  acknowledgement is left for the caller to notice
+                  rather than papered over here.
+
+        Returns:
+            The raw response bytes, or None if every attempt failed.
+        """
+        for attempt in range(attempts):
+            response = self._exchange(block)
+            if response is not None:
+                return response
+            if attempt + 1 < attempts:
+                time.sleep(self.retry_backoff_s)
+        return None
+
+    def _exchange(self, block: bytes) -> bytes | None:
+        """Run one RS485 handshake; return the response or None.
+
+        Execute the handshake sequence:
             1) host->amp: module_byte+ENQ, amp->host: EOT
             2) host->amp: data block,      amp->host: ACK+ENQ
             3) host->amp: module_byte+EOT, amp->host: response
             4) host->amp: ACK
 
-        Return the raw response bytes, or None on failure.
+        Every wait here is bounded by ``exchange_timeout_s`` rather than
+        the port's own timeout, so one attempt costs a bounded amount of
+        time and ``_send_and_receive`` can afford to retry.
         """
+        try:
+            saved_timeout = self.ser.timeout
+            self.ser.timeout = self.exchange_timeout_s
+            try:
+                return self._handshake(block)
+            finally:
+                self.ser.timeout = saved_timeout
+        except (OSError, serial.SerialException) as exc:
+            # An OS-level error here is the device, not the protocol: the
+            # node was deleted under us by a re-enumeration. Note the
+            # timeout assignment above is inside the try on purpose --
+            # it calls tcsetattr, so on a vanished node it is usually the
+            # *first* thing to raise, which made this look like a driver
+            # bug rather than a missing device.
+            print(f" RS485 link error ({exc}); attempting to reopen.")
+            self._reopen()
+            return None
+
+    def _handshake(self, block: bytes) -> bytes | None:
+        """The handshake itself; see :meth:`_exchange` for the timeout."""
         module_byte = 0x80 | (self.id & 0x7F)
         self.ser.reset_input_buffer()
         self.ser.write(bytes([module_byte, self.ENQ]))
@@ -190,7 +423,7 @@ class LinearMotorController:
         start = time.time()
         eot_received = False
 
-        while time.time() - start < 2:
+        while time.time() - start < self.exchange_timeout_s:
             data = self.ser.read(1)
 
             if data and data[0] == self.EOT:
@@ -225,7 +458,7 @@ class LinearMotorController:
         if not enq_received:
             start = time.time()
 
-            while time.time() - start < 2:
+            while time.time() - start < self.exchange_timeout_s:
                 data = self.ser.read(1)
 
                 if data and data[0] == self.ENQ:
@@ -279,7 +512,9 @@ class LinearMotorController:
         two bytes: high=X0h, low=YZh -> "Ver.X.0YZ".
         """
         block = self._build_command(command=0, mode=1)
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
 
         if response is None:
             return None
@@ -307,7 +542,9 @@ class LinearMotorController:
         Use command=0, mode=5 (amp model).
         """
         block = self._build_command(command=0, mode=5)
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return None
 
@@ -334,7 +571,9 @@ class LinearMotorController:
         reverse, positive for forward.
         """
         block = self._build_command(command=2, mode=2)
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return None
 
@@ -358,10 +597,18 @@ class LinearMotorController:
         Use command=1, mode=7 with param=0x01 (acquire).
         Must be called before writing parameters. Release
         with _release_execution_rights() when done.
+
+        Retried like a read, because it behaves like one: taking the
+        control token moves nothing, and asking for it twice leaves the
+        amp in the same state as asking once. A single lost exchange
+        here used to abort an entire move before it started -- a 50 mm
+        return leg failed exactly this way on the bench.
         """
         block = self._build_command(command=1, mode=7, params=bytes([0x01]))
 
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return False
 
@@ -377,9 +624,15 @@ class LinearMotorController:
         """Release execution rights after parameter writes.
 
         Use command=1, mode=7 with param=0x00 (release).
+
+        Retried for the same reason as the acquire: handing the token
+        back moves nothing, and doing it twice is indistinguishable from
+        doing it once. Leaving the token held would block the next move.
         """
         block = self._build_command(command=1, mode=7, params=bytes([0x00]))
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return False
 
@@ -421,7 +674,9 @@ class LinearMotorController:
         """
         param_data = bytes([category, number])
         block = self._build_command(command=7, mode=0, params=param_data)
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return None
 
@@ -437,6 +692,59 @@ class LinearMotorController:
             return value
 
         return None
+
+    def _stop_motion(self) -> bool:
+        """Command zero speed, retrying until the amp acknowledges.
+
+        This is the one write that must be retried. Every other
+        parameter write is left single-shot because re-sending it could
+        apply an action twice, but **writing speed 0 is idempotent** --
+        repeating it cannot move the rail, only stop it again. And it is
+        the write that matters most: at the measured ~10% RS485 failure
+        rate, an unchecked single attempt leaves the rail running at
+        speed roughly one stop in ten, until some later call happens to
+        write a different speed. `move_relative` ignored this return
+        value entirely, which is how a 1.4 mm correction travelled
+        13 mm on the bench.
+
+        Returns:
+            True if the amp acknowledged a zero-speed write.
+        """
+        for _ in range(self.stop_attempts):
+            if self._write_parameter(3, 4, 0):
+                return True
+        return False
+
+    def _abort_if_link_dropped(self, link_at_start: int) -> None:
+        """Stop the rail if the link reconnected mid-move.
+
+        A reconnect means some window of the move happened with nobody
+        able to read the rail or command it. Whatever the loop believes
+        about position is from before that window, so the move cannot be
+        continued -- the speed command is still latched in the amp and
+        the rail may well still be travelling.
+
+        Args:
+            link_at_start: :attr:`link_generation` sampled before the
+                move began.
+
+        Raises:
+            MotionStopError: If the rail could not be stopped. The rail
+                may still be moving; this is an operator emergency.
+            LinkDroppedError: If it was stopped. The move failed, but
+                the rail is known to be stationary.
+        """
+        if self.link_generation == link_at_start:
+            return
+        if not self._stop_motion():
+            raise MotionStopError(
+                "the RS485 link dropped mid-move and the rail could not "
+                "be stopped afterwards; its motion state is unknown"
+            )
+        raise LinkDroppedError(
+            "the RS485 link dropped mid-move; the rail was stopped, but "
+            "it travelled an unknown distance while the link was down"
+        )
 
     def move_relative(
         self,
@@ -473,11 +781,19 @@ class LinearMotorController:
         if not self._acquire_execution_rights():
             return None
 
+        stopped = False
+        speed_written = False
         try:
-            self._write_parameter(3, 4, direction * abs_speed)
-
+            speed_written = self._write_parameter(3, 4, direction * abs_speed)
+            # Do not poll for a move that was never commanded. This
+            # return value used to be discarded, so a lost speed write
+            # became `timeout` seconds of watching a stationary rail,
+            # reported upward as "stalled" — which reads as "the servo
+            # fought the load" and sent a bench day looking at limit
+            # switches. Skipping the wait also turns a 36 s failure into
+            # an immediate one.
             start_time = time.time()
-            while time.time() - start_time < timeout:
+            while speed_written and time.time() - start_time < timeout:
                 current = self.read_feedback_pulse_position()
                 if current is None:
                     break
@@ -493,8 +809,26 @@ class LinearMotorController:
             # Always stop and release, even on exceptions or Ctrl+C,
             # so a KeyboardInterrupt does not leave Pr3.04 commanding
             # motion after the script exits.
-            self._write_parameter(3, 4, 0)
+            stopped = self._stop_motion()
             self._release_execution_rights()
+
+        if not stopped:
+            raise MotionStopError(
+                f"the amp did not acknowledge the zero-speed write after "
+                f"{self.stop_attempts} attempts. THE RAIL MAY STILL BE "
+                f"MOVING at {direction * abs_speed} r/min — use the "
+                f"physical e-stop."
+            )
+        # Checked after the stop, so the more serious condition wins if
+        # both went wrong. A rail that was never commanded is not moving,
+        # which is why this is the lesser of the two.
+        if not speed_written:
+            raise SpeedCommandError(
+                f"the amp did not acknowledge the speed command "
+                f"({direction * abs_speed} r/min), so the rail was never "
+                f"told to move. It has not left "
+                f"{start_pos / self.pulses_per_mm} mm."
+            )
 
         time.sleep(2)
         final = self.read_feedback_pulse_position()
@@ -553,10 +887,11 @@ class LinearMotorController:
     def move_to_mm(
         self,
         target_mm: float,
-        tolerance_mm: float = 0.1,
-        max_iterations: int = 5,
+        tolerance_mm: float = 2.0,
+        max_iterations: int = 12,
         timeout_per_step: float = 10.0,
-    ) -> float | None:
+        stall_patience: int = 3,
+    ) -> MoveResult | None:
         """Move to an absolute target position in millimeters.
 
         Implement a software closed loop on top of move_relative_mm():
@@ -566,20 +901,58 @@ class LinearMotorController:
         the PIDController class attributes (kp / ki / kd / output_max
         ...) to retune without changing call sites.
 
-        Abort early if the residual error stops decreasing
-        (convergence stalled) or max_iterations is reached.
+        The loop gives up when the residual has failed to improve for
+        ``stall_patience`` consecutive iterations, or when
+        ``max_iterations`` is reached. Either way it reports **where it
+        stopped and whether that is the target** -- see below.
+
+        The default tolerance is deliberately coarse, and it is not only
+        an acceptance criterion: it is also handed to move_relative_mm,
+        where the poll loop stops as soon as the remaining distance is
+        within it. So the tolerance decides *how the rail is driven*, not
+        just when the result is called good.
+
+        At 0.1 mm the loop chased the target, coasted past it -- the
+        measured overshoot at speed 25 is 1.5-1.8 mm -- and then had to
+        recover with small, slow corrections. Every failure on the bench
+        happened in that small-correction regime: one iteration commanded
+        -1.534 mm and travelled -12.579 mm, another commanded -1.837 mm
+        and moved 0.008 mm. Setting the tolerance above the natural coast
+        keeps the loop out of that regime, because the first coarse move
+        already lands inside it.
 
         Args:
             target_mm -- absolute target position in mm
-            tolerance_mm -- acceptable |error| in mm
+            tolerance_mm -- acceptable |error| in mm. Above the coast
+                distance (~2 mm here) the rail converges in one or two
+                moves; below it, expect the correction chatter described
+                above. Tighten only if the bench needs it *and* the
+                RS485 link is reliable.
             max_iterations -- correction attempts cap
             timeout_per_step -- per-move timeout in seconds
+            stall_patience -- consecutive non-improving iterations
+                tolerated before declaring the loop stalled. One
+                stalled correction is normal on a servo; this used to
+                be 1, which abandoned real moves on noise.
 
-        Return the final position in mm, or None on failure.
+        Returns:
+            A :class:`MoveResult` carrying the final position and
+            whether it is within tolerance, or ``None`` if the amp
+            stopped answering (position unknown).
+
+            **This used to return a bare float on every path**, so
+            "arrived at 0.0" and "gave up at 0.676" were
+            indistinguishable and callers reported both as success.
+            Check ``converged`` before trusting ``position_mm`` as the
+            commanded position.
         """
         current_mm = self.read_position_mm()
         if current_mm is None:
             return None
+        # Sampled *after* the first read, so a reconnect that happened
+        # while merely establishing position does not count as one
+        # during the move -- nothing was in motion yet.
+        link_at_start = self.link_generation
 
         error_mm = target_mm - current_mm
         print(
@@ -588,10 +961,11 @@ class LinearMotorController:
         )
         if abs(error_mm) <= tolerance_mm:
             print("  Already within tolerance; no motion issued.")
-            return current_mm
+            return MoveResult(current_mm, True, "already_in_tolerance")
 
         pid = PIDController()
         prev_abs_error = abs(error_mm)
+        stalled_iterations = 0
         prev_time = time.time()
         for iteration in range(max_iterations):
             now = time.time()
@@ -601,7 +975,9 @@ class LinearMotorController:
             speed = int(round(abs(out_signed)))
             if speed <= 0:
                 print(f"  iter {iteration + 1}: within deadband; stop.")
-                return current_mm
+                return MoveResult(
+                    current_mm, abs(error_mm) <= tolerance_mm, "deadband"
+                )
 
             print(
                 f"  iter {iteration + 1}: move {error_mm:+.3f} mm"
@@ -613,11 +989,16 @@ class LinearMotorController:
                 tolerance_mm=tolerance_mm,
                 timeout=timeout_per_step,
             )
+            # Checked before the result is inspected: if the link
+            # dropped, `result` describes the world from before the gap
+            # and must not be believed.
+            self._abort_if_link_dropped(link_at_start)
             if result is None:
                 print(f"  iter {iteration + 1}: move_relative_mm failed.")
                 return None
 
             current_mm = self.read_position_mm()
+            self._abort_if_link_dropped(link_at_start)
             if current_mm is None:
                 return None
             error_mm = target_mm - current_mm
@@ -628,21 +1009,26 @@ class LinearMotorController:
 
             if abs(error_mm) <= tolerance_mm:
                 print("  Converged within tolerance.")
-                return current_mm
+                return MoveResult(current_mm, True, "converged")
 
             if abs(error_mm) >= prev_abs_error:
+                stalled_iterations += 1
                 print(
-                    "  Residual stopped decreasing; aborting"
-                    " to avoid oscillation."
+                    f"  Residual did not improve"
+                    f" ({stalled_iterations}/{stall_patience})."
                 )
-                return current_mm
-            prev_abs_error = abs(error_mm)
+                if stalled_iterations >= stall_patience:
+                    print("  Stalled; aborting to avoid oscillation.")
+                    return MoveResult(current_mm, False, "stalled")
+            else:
+                stalled_iterations = 0
+                prev_abs_error = abs(error_mm)
 
         print(
             f"  Did not converge within {max_iterations} iterations;"
             f" residual {error_mm:+.4f} mm."
         )
-        return current_mm
+        return MoveResult(current_mm, False, "iteration_cap")
 
 
 def main():

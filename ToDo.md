@@ -604,3 +604,277 @@ rows for the deleted PDF, `LearnedPatterns.md` L22, marking Task 8
 cancelled, and deleting `claude_test/check_input_signals.py`.
 `MinasA6_driver_main.pdf` still awaits the user's confirmation before
 deletion, per Scope C.
+
+---
+
+## 2026-07-28 — Retry read-only RS485 commands
+
+Found while bringing up cell4 of the downstream InnoCORESDL project on
+real hardware. A single MINAS handshake fails intermittently: sampling
+the rail position through the cell server returned `None` **2 times in
+20** (10%) with the rail otherwise healthy and no USB disconnects in the
+kernel log. Because `move_to_mm` closes its loop on `read_position_mm`
+every iteration, one lost read aborted an entire move — the first
+operator-gated motion run failed part way through for this reason.
+
+### Work items
+- [x] Append this ToDo entry
+- [ ] Create GitHub issue — **blocked**: no GitHub credentials on this
+      host (`git push` fails with `could not read Username`)
+- [x] Cut working branch `fix/rs485-read-retry`
+- [x] Split the handshake out of `_send_and_receive` into `_exchange`,
+      and make `_send_and_receive(block, attempts=1)` loop over it with
+      a `retry_backoff_s` pause between tries
+- [x] Apply `attempts=read_retry_attempts` (3) to the **four read-only**
+      call sites only: `read_software_version`, `read_model_name`,
+      `read_feedback_pulse_position`, `_read_parameter`
+- [x] Deliberately leave `_acquire_execution_rights`,
+      `_release_execution_rights` and `_write_parameter` single-shot —
+      they are not idempotent, and re-sending one could apply a motion
+      or parameter change twice. The default `attempts=1` preserves
+      their existing behaviour exactly.
+- [x] `ruff check` + `ruff format --check` pass
+- [x] **Hardware-verified**: 30 consecutive position reads through the
+      cell server, **0 failures** (was 2/20 before the change)
+- [ ] Push branch, open PR per §15.2 — blocked on the same credentials
+
+---
+
+## 2026-07-28 — Make move_to_mm report arrival, not just position
+
+Follow-up to the retry work above, from the same cell4 bring-up. The
+first full motion run reached its last step and failed:
+`move_back` was commanded to 0.0 mm, the rail stopped at **0.676 mm**,
+and the cell above reported `200 OK` — because `move_to_mm` returned a
+bare float on *every* exit path, so "converged at 0.0" and "gave up at
+0.676" were the same value to a caller.
+
+### Work items
+- [x] Append this ToDo entry
+- [ ] Create GitHub issue — **blocked**: no GitHub credentials on this
+      host (`git push` → `could not read Username`)
+- [x] Add a frozen `MoveResult` dataclass (`position_mm`, `converged`,
+      `reason`) and return it from every `move_to_mm` exit
+- [x] Soften the stall detector: `stall_patience = 3` consecutive
+      non-improving iterations instead of aborting on the first one.
+      A single stalled correction is normal on a servo; the old
+      behaviour abandoned real moves on noise. The improvement baseline
+      (`prev_abs_error`) now only advances on an actual improvement.
+- [x] Raise `max_iterations` 5 → 12 so the extra patience has room
+- [x] Update `server.py`, the only in-repo caller: a non-converged move
+      now sets `state="error"` with the position it actually stopped at,
+      instead of reporting `idle` at the wrong place
+- [x] `ruff check` + `ruff format --check` pass on both files
+- [x] Contract verified without hardware: `converged` returns the
+      position; `stalled` and `iteration_cap` raise in the downstream
+      cell; `None` still raises the transport error
+- [ ] Re-run the full motion scenario to confirm the return leg now
+      converges (operator-gated; the run needs a console confirmation)
+- [ ] Push branch, open PR per §15.2 — blocked on the same credentials
+
+---
+
+## 2026-07-28 — Retry and verify the stop command
+
+Found while diagnosing why a 50 mm move oscillated and stalled at
+48.592 mm. The per-iteration log showed corrections travelling far
+further than commanded — `move +1.408 mm @ speed 6` moved **13.0 mm**.
+
+### Root cause
+`move_relative`'s `finally` block called
+`self._write_parameter(3, 4, 0)` and **discarded the return value**.
+`_write_parameter` returns `False` on a failed RS485 exchange, so at the
+bench's error rate the stop silently did not happen and the rail kept
+running at the commanded speed until some later call wrote a different
+one.
+
+Measured on the real amp: a single-shot zero-speed write succeeded
+**28 times in 30** — roughly one stop in fifteen was being lost.
+
+An earlier note in this file claimed writes must never be retried
+because they are not idempotent. That is right for positioning writes
+and wrong for this one: **writing speed 0 twice is identical to writing
+it once**, and it is the write whose failure matters most.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] Add `_stop_motion()`: retries the zero-speed write up to
+      `stop_attempts` (5) and reports whether the amp acknowledged
+- [x] `move_relative` now raises `MotionStopError` when the stop cannot
+      be confirmed, instead of returning normally as if it had stopped
+- [x] Keep every other write single-shot — the idempotency argument
+      still holds for them
+- [x] `ruff check` + `ruff format --check` pass
+- [x] **Hardware-verified**: single-shot stop 28/30; `_stop_motion`
+      **30/30**; rail position unchanged (0.175 → 0.175 mm) across 60
+      zero-speed writes, confirming the write is idempotent
+- [ ] Create GitHub issue — operator has now run `gh auth login`; file
+      this together with the two earlier entries
+- [ ] Re-run the 50 mm scenario to confirm the oscillation is gone
+      (operator-gated)
+
+---
+
+## 2026-07-28 — Retry the execution-rights exchange too
+
+A 50 mm return leg aborted before it moved:
+
+```
+iter 1: move -50.023 mm @ speed 25 r/min
+Start=50023, Target=0
+Response block receive timeout.
+iter 1: move_relative_mm failed.
+```
+
+`Start=` printed but `Final=` did not, which places the failure in
+`_acquire_execution_rights()` — left at `attempts=1` by the earlier retry
+work on the grounds that "writes are not idempotent".
+
+That grouping was wrong twice in one session (see also the stop write).
+Acquiring or releasing the control token **moves nothing**, and asking
+for it twice leaves the amp exactly as asking once would. The right split
+is by *what re-sending actually does*, not by the read/write label.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] `_acquire_execution_rights` / `_release_execution_rights` now pass
+      `attempts=read_retry_attempts`
+- [x] Rewrite the `_send_and_receive` docstring, which stated the wrong
+      rule: it now classifies by effect, and records that the speed write
+      (`Pr3.04`) alone stays single-shot because its re-send starts motion
+- [x] `ruff check` + `ruff format --check` pass
+- [x] **Hardware-verified** on the real amp: single-shot acquire
+      **39/40** (that one failure aborts a whole move); with retry
+      **40/40** acquire and **40/40** release. Rail unmoved across all
+      120 exchanges (50.016 → 50.016 mm), confirming the token
+      operations are motion-free.
+- [x] Parent suite still green: `pytest` 32 pass, 5/5 cell contract cases
+- [ ] Confirm on a full 50 mm round trip (operator-gated)
+
+---
+
+## 2026-07-28 — Bound one handshake attempt (exchange_timeout_s)
+
+The retry added earlier raised reliability without bounding latency, and
+the first scenario run to reach the balance died on its **first** step:
+
+```
+No EOT response from amplifier.     <- attempt 1 (2 s)
+No EOT response from amplifier.     <- attempt 2 (2 s)
+No EOT response from amplifier.     <- attempt 3 (2 s)
+cell4 GET status timed out after 5.0s
+```
+
+Three attempts at the port's 2 s timeout is over six seconds, so a plain
+`GET /v1/status` could exceed a scenario's 5 s step timeout. Retrying was
+right; leaving each attempt on a 2 s budget was not.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] Add `exchange_timeout_s = 0.3`. A whole exchange normally costs
+      ~26 ms (a 24-byte reply at 9600 bps is ~25 ms), so this is ten
+      times the honest cost of a good read.
+- [x] Split the handshake into `_handshake`; `_exchange` now sets the
+      port timeout to the budget and restores it in a `finally`, and both
+      EOT/ENQ wait loops use the budget instead of a hardcoded 2 s
+- [x] `ruff check` + `ruff format --check` pass; parent suite still
+      32 pass
+- [x] **Verified without hardware** (the rail adapter is in an EPROTO
+      fault, see below): one attempt bounded at 0.31 s; the handshake
+      uses the short timeout; the original is restored, including on the
+      exception path; **three attempts total 1.02 s, down from 6 s+** —
+      which is the specific failure above, fixed.
+- [ ] **Not yet measured on hardware**: the success rate at a 0.3 s
+      budget, and whether it shrinks `move_relative`'s poll-loop blind
+      window enough to reduce the per-iteration overshoot. 0.3 s is ten
+      times the median read, but that is arithmetic, not a measurement.
+- [ ] Push branch, open PR (issue #23 covers this work)
+
+### Bench note — the adapter, not the software
+
+The Moxa UPort 1150 failed **four times today**, each time needing a
+physical re-plug and recurring within minutes. Kernel logs ~20,000
+`urb status -71` (EPROTO) per minute while it is faulted, and once wedged
+the port cannot even be opened (`ti_open - cannot send open command,
+-71`). The balance on the same bus is unaffected throughout, so this is
+the adapter or its cabling, not the bus and not this driver. Worth
+correcting an earlier reading of mine: the three consecutive EOT misses
+above looked like retry latency alone, but three in a row is ~0.1% by
+chance at the measured ~10% single-read failure rate — the adapter was
+already degrading when that run started.
+
+### Correction — 0.3 s was wrong; measurement reversed it
+
+The 0.3 s budget above was reasoned from arithmetic ("10x the 27 ms
+median must be plenty") and never measured against the amp, because the
+adapter was faulted when it was written. Measured as soon as the adapter
+came back, over 60 reads each:
+
+```
+budget   success   median
+2.0 s     60/60      27 ms
+0.3 s     28/60    1002 ms
+```
+
+- [x] **Reverted `exchange_timeout_s` to 2.0.** A 1002 ms median at
+      0.3 s means nearly every read burned all three attempts. Aborting a
+      handshake part-way leaves this half-duplex bus out of step and the
+      next attempt fails on the wreckage of the last, so a tight budget
+      is self-reinforcing rather than self-correcting.
+- [x] Kept the plumbing: the budget is now an explicit, documented,
+      tunable class attribute with a `finally` that restores the port
+      timeout, and the measurement is recorded beside it so the next
+      person does not repeat the experiment.
+- [x] **Fixed the actual mismatch in the scenarios instead.** The
+      complaint was never the driver: with a healthy adapter the measured
+      worst case is 2078 ms — one slow attempt then a good one — and the
+      six-second case only appeared while the USB adapter was dying. The
+      `status` steps' `timeout_s: 5.0` was simply too tight for a read
+      that reaches an amp over RS485. Raised to 15 s in all three
+      scenarios, with the measurement quoted in each.
+- [x] Re-verified: ruff clean, parent suite 32 pass, all three scenarios
+      parse, and the timeout plumbing still bounds and restores correctly
+      at the 2.0 s budget.
+
+---
+
+## 2026-07-28 — Relax the positioning tolerance to 2.0 mm
+
+Operator's call after reviewing the three options (retry the speed write
+/ move to the amp's position-control mode / relax the tolerance).
+
+`tolerance_mm` is not only an acceptance criterion: `move_to_mm` hands it
+to `move_relative_mm`, whose poll loop stops as soon as the remaining
+distance falls inside it. So the value decides **how the rail is driven**.
+
+At 0.1 mm the loop chased the target, coasted past it (measured overshoot
+1.5-1.8 mm at speed 25), then tried to recover with small slow moves —
+and every bench failure happened in exactly that regime:
+
+```
+iter 2: move -1.534 mm @ speed 6  ->  travelled -12.579 mm
+iter 4: move -1.837 mm @ speed 7  ->  travelled  +0.008 mm
+```
+
+Setting the tolerance above the natural coast keeps the loop out of that
+regime: the first coarse move should already land inside it.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] `move_to_mm` default `tolerance_mm` 0.1 -> 2.0, with the reasoning
+      and the measured coast recorded in the docstring
+- [x] Both scenarios' `params.tolerance_mm` 0.1 -> 2.0. These must match:
+      an assert tighter than what `move_to_mm` accepts fails every run on
+      a rail the driver considers arrived.
+- [x] ruff clean; parent suite 32 pass; all three scenarios parse; driver
+      default and scenario params confirmed equal
+- [x] Checked against the recorded failures — 1.846, 1.408 and 0.676 mm
+      all now inside tolerance
+- [ ] **Not measured on hardware.** The adapter has been dead since
+      before this change. Two things need confirming when it returns:
+      that the first coarse move really does land inside 2 mm (the whole
+      premise), and that the loop stops chattering.
+- [ ] Consider tightening later if the bench needs better than 2 mm
+      *and* the RS485 link becomes reliable. 2 mm is a 20x relaxation and
+      is a real loss of positioning precision, taken deliberately to buy
+      convergence on an unreliable link.
