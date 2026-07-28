@@ -236,10 +236,19 @@ class LinearMotorController:
         Args:
             block: The framed data block from ``_build_command``.
             attempts: How many times to run the handshake before giving
-                up. **Leave at 1 for any command that changes amp state**
-                -- parameter writes and execution-rights acquire/release
-                are not idempotent, and re-sending one could apply the
-                action twice. Only reads may be retried.
+                up. Choose it by **what re-sending actually does**, not
+                by whether the command is nominally a read or a write:
+
+                * Position and identity reads, and the execution-rights
+                  acquire/release, are all safe to repeat -- they move
+                  nothing, and doing them twice leaves the amp exactly
+                  as doing them once would.
+                * The zero-speed stop is likewise safe, and is retried
+                  harder still; see :meth:`_stop_motion`.
+                * A speed write (``Pr3.04``) keeps ``attempts=1``. It is
+                  the one command whose re-send starts motion, so a lost
+                  acknowledgement is left for the caller to notice
+                  rather than papered over here.
 
         Returns:
             The raw response bytes, or None if every attempt failed.
@@ -442,10 +451,18 @@ class LinearMotorController:
         Use command=1, mode=7 with param=0x01 (acquire).
         Must be called before writing parameters. Release
         with _release_execution_rights() when done.
+
+        Retried like a read, because it behaves like one: taking the
+        control token moves nothing, and asking for it twice leaves the
+        amp in the same state as asking once. A single lost exchange
+        here used to abort an entire move before it started -- a 50 mm
+        return leg failed exactly this way on the bench.
         """
         block = self._build_command(command=1, mode=7, params=bytes([0x01]))
 
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return False
 
@@ -461,9 +478,15 @@ class LinearMotorController:
         """Release execution rights after parameter writes.
 
         Use command=1, mode=7 with param=0x00 (release).
+
+        Retried for the same reason as the acquire: handing the token
+        back moves nothing, and doing it twice is indistinguishable from
+        doing it once. Leaving the token held would block the next move.
         """
         block = self._build_command(command=1, mode=7, params=bytes([0x00]))
-        response = self._send_and_receive(block)
+        response = self._send_and_receive(
+            block, attempts=self.read_retry_attempts
+        )
         if response is None:
             return False
 

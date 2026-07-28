@@ -712,3 +712,41 @@ it once**, and it is the write whose failure matters most.
       this together with the two earlier entries
 - [ ] Re-run the 50 mm scenario to confirm the oscillation is gone
       (operator-gated)
+
+---
+
+## 2026-07-28 — Retry the execution-rights exchange too
+
+A 50 mm return leg aborted before it moved:
+
+```
+iter 1: move -50.023 mm @ speed 25 r/min
+Start=50023, Target=0
+Response block receive timeout.
+iter 1: move_relative_mm failed.
+```
+
+`Start=` printed but `Final=` did not, which places the failure in
+`_acquire_execution_rights()` — left at `attempts=1` by the earlier retry
+work on the grounds that "writes are not idempotent".
+
+That grouping was wrong twice in one session (see also the stop write).
+Acquiring or releasing the control token **moves nothing**, and asking
+for it twice leaves the amp exactly as asking once would. The right split
+is by *what re-sending actually does*, not by the read/write label.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] `_acquire_execution_rights` / `_release_execution_rights` now pass
+      `attempts=read_retry_attempts`
+- [x] Rewrite the `_send_and_receive` docstring, which stated the wrong
+      rule: it now classifies by effect, and records that the speed write
+      (`Pr3.04`) alone stays single-shot because its re-send starts motion
+- [x] `ruff check` + `ruff format --check` pass
+- [x] **Hardware-verified** on the real amp: single-shot acquire
+      **39/40** (that one failure aborts a whole move); with retry
+      **40/40** acquire and **40/40** release. Rail unmoved across all
+      120 exchanges (50.016 → 50.016 mm), confirming the token
+      operations are motion-free.
+- [x] Parent suite still green: `pytest` 32 pass, 5/5 cell contract cases
+- [ ] Confirm on a full 50 mm round trip (operator-gated)
