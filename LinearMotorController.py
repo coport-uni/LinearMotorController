@@ -731,7 +731,7 @@ class LinearMotorController:
     def move_to_mm(
         self,
         target_mm: float,
-        tolerance_mm: float = 0.1,
+        tolerance_mm: float = 2.0,
         max_iterations: int = 12,
         timeout_per_step: float = 10.0,
         stall_patience: int = 3,
@@ -750,9 +750,28 @@ class LinearMotorController:
         ``max_iterations`` is reached. Either way it reports **where it
         stopped and whether that is the target** -- see below.
 
+        The default tolerance is deliberately coarse, and it is not only
+        an acceptance criterion: it is also handed to move_relative_mm,
+        where the poll loop stops as soon as the remaining distance is
+        within it. So the tolerance decides *how the rail is driven*, not
+        just when the result is called good.
+
+        At 0.1 mm the loop chased the target, coasted past it -- the
+        measured overshoot at speed 25 is 1.5-1.8 mm -- and then had to
+        recover with small, slow corrections. Every failure on the bench
+        happened in that small-correction regime: one iteration commanded
+        -1.534 mm and travelled -12.579 mm, another commanded -1.837 mm
+        and moved 0.008 mm. Setting the tolerance above the natural coast
+        keeps the loop out of that regime, because the first coarse move
+        already lands inside it.
+
         Args:
             target_mm -- absolute target position in mm
-            tolerance_mm -- acceptable |error| in mm
+            tolerance_mm -- acceptable |error| in mm. Above the coast
+                distance (~2 mm here) the rail converges in one or two
+                moves; below it, expect the correction chatter described
+                above. Tighten only if the bench needs it *and* the
+                RS485 link is reliable.
             max_iterations -- correction attempts cap
             timeout_per_step -- per-move timeout in seconds
             stall_patience -- consecutive non-improving iterations

@@ -835,3 +835,46 @@ budget   success   median
 - [x] Re-verified: ruff clean, parent suite 32 pass, all three scenarios
       parse, and the timeout plumbing still bounds and restores correctly
       at the 2.0 s budget.
+
+---
+
+## 2026-07-28 — Relax the positioning tolerance to 2.0 mm
+
+Operator's call after reviewing the three options (retry the speed write
+/ move to the amp's position-control mode / relax the tolerance).
+
+`tolerance_mm` is not only an acceptance criterion: `move_to_mm` hands it
+to `move_relative_mm`, whose poll loop stops as soon as the remaining
+distance falls inside it. So the value decides **how the rail is driven**.
+
+At 0.1 mm the loop chased the target, coasted past it (measured overshoot
+1.5-1.8 mm at speed 25), then tried to recover with small slow moves —
+and every bench failure happened in exactly that regime:
+
+```
+iter 2: move -1.534 mm @ speed 6  ->  travelled -12.579 mm
+iter 4: move -1.837 mm @ speed 7  ->  travelled  +0.008 mm
+```
+
+Setting the tolerance above the natural coast keeps the loop out of that
+regime: the first coarse move should already land inside it.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] `move_to_mm` default `tolerance_mm` 0.1 -> 2.0, with the reasoning
+      and the measured coast recorded in the docstring
+- [x] Both scenarios' `params.tolerance_mm` 0.1 -> 2.0. These must match:
+      an assert tighter than what `move_to_mm` accepts fails every run on
+      a rail the driver considers arrived.
+- [x] ruff clean; parent suite 32 pass; all three scenarios parse; driver
+      default and scenario params confirmed equal
+- [x] Checked against the recorded failures — 1.846, 1.408 and 0.676 mm
+      all now inside tolerance
+- [ ] **Not measured on hardware.** The adapter has been dead since
+      before this change. Two things need confirming when it returns:
+      that the first coarse move really does land inside 2 mm (the whole
+      premise), and that the loop stops chattering.
+- [ ] Consider tightening later if the bench needs better than 2 mm
+      *and* the RS485 link becomes reliable. 2 mm is a 20x relaxation and
+      is a real loss of positioning precision, taken deliberately to buy
+      convergence on an unreliable link.
