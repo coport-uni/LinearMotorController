@@ -637,3 +637,37 @@ operator-gated motion run failed part way through for this reason.
 - [x] **Hardware-verified**: 30 consecutive position reads through the
       cell server, **0 failures** (was 2/20 before the change)
 - [ ] Push branch, open PR per §15.2 — blocked on the same credentials
+
+---
+
+## 2026-07-28 — Make move_to_mm report arrival, not just position
+
+Follow-up to the retry work above, from the same cell4 bring-up. The
+first full motion run reached its last step and failed:
+`move_back` was commanded to 0.0 mm, the rail stopped at **0.676 mm**,
+and the cell above reported `200 OK` — because `move_to_mm` returned a
+bare float on *every* exit path, so "converged at 0.0" and "gave up at
+0.676" were the same value to a caller.
+
+### Work items
+- [x] Append this ToDo entry
+- [ ] Create GitHub issue — **blocked**: no GitHub credentials on this
+      host (`git push` → `could not read Username`)
+- [x] Add a frozen `MoveResult` dataclass (`position_mm`, `converged`,
+      `reason`) and return it from every `move_to_mm` exit
+- [x] Soften the stall detector: `stall_patience = 3` consecutive
+      non-improving iterations instead of aborting on the first one.
+      A single stalled correction is normal on a servo; the old
+      behaviour abandoned real moves on noise. The improvement baseline
+      (`prev_abs_error`) now only advances on an actual improvement.
+- [x] Raise `max_iterations` 5 → 12 so the extra patience has room
+- [x] Update `server.py`, the only in-repo caller: a non-converged move
+      now sets `state="error"` with the position it actually stopped at,
+      instead of reporting `idle` at the wrong place
+- [x] `ruff check` + `ruff format --check` pass on both files
+- [x] Contract verified without hardware: `converged` returns the
+      position; `stalled` and `iteration_cap` raise in the downstream
+      cell; `None` still raises the transport error
+- [ ] Re-run the full motion scenario to confirm the return leg now
+      converges (operator-gated; the run needs a console confirmation)
+- [ ] Push branch, open PR per §15.2 — blocked on the same credentials

@@ -264,9 +264,26 @@ class RailMonitor:
             )
         if result is None:
             self._set_state(connected=False, state="error", error="move failed")
+        elif not result.converged:
+            # The amp answered, so the link is fine and the position is
+            # real -- the rail simply never reached the target. Record
+            # where it actually stopped and surface it as an error rather
+            # than reporting the move done at the wrong place.
+            self._set_state(
+                connected=True,
+                position_mm=result.position_mm,
+                state="error",
+                error=(
+                    f"move to {target_mm} mm did not converge"
+                    f" ({result.reason}); stopped at {result.position_mm} mm"
+                ),
+            )
         else:
             self._set_state(
-                connected=True, position_mm=result, state="idle", error=None
+                connected=True,
+                position_mm=result.position_mm,
+                state="idle",
+                error=None,
             )
         return self.current_status()
 

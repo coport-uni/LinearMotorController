@@ -7,6 +7,7 @@ Communicate using the MINAS standard serial protocol
 import re
 import sys
 import time
+from dataclasses import dataclass
 
 import serial
 from serial.tools import list_ports
@@ -42,6 +43,30 @@ def resolve_port(port: str) -> str:
     if not devices:
         raise RuntimeError(f"no serial adapter with VID:PID {port} connected")
     return devices[0]
+
+
+@dataclass(frozen=True)
+class MoveResult:
+    """Outcome of an absolute move: where it stopped, and did it arrive.
+
+    ``move_to_mm`` used to return a bare float whether it converged or
+    gave up, so callers could not tell a completed move from an
+    abandoned one and reported both as success. Splitting the answer in
+    two makes the distinction impossible to overlook.
+
+    Attributes:
+        position_mm: The last position actually read from the amp.
+        converged: True only if ``position_mm`` is within the caller's
+            tolerance of the commanded target. Check this before
+            treating the move as done.
+        reason: Why the loop finished -- ``"converged"``,
+            ``"already_in_tolerance"``, ``"stalled"``, ``"deadband"``
+            or ``"iteration_cap"``. For logging and diagnosis.
+    """
+
+    position_mm: float
+    converged: bool
+    reason: str
 
 
 class PIDController:
@@ -599,9 +624,10 @@ class LinearMotorController:
         self,
         target_mm: float,
         tolerance_mm: float = 0.1,
-        max_iterations: int = 5,
+        max_iterations: int = 12,
         timeout_per_step: float = 10.0,
-    ) -> float | None:
+        stall_patience: int = 3,
+    ) -> MoveResult | None:
         """Move to an absolute target position in millimeters.
 
         Implement a software closed loop on top of move_relative_mm():
@@ -611,16 +637,31 @@ class LinearMotorController:
         the PIDController class attributes (kp / ki / kd / output_max
         ...) to retune without changing call sites.
 
-        Abort early if the residual error stops decreasing
-        (convergence stalled) or max_iterations is reached.
+        The loop gives up when the residual has failed to improve for
+        ``stall_patience`` consecutive iterations, or when
+        ``max_iterations`` is reached. Either way it reports **where it
+        stopped and whether that is the target** -- see below.
 
         Args:
             target_mm -- absolute target position in mm
             tolerance_mm -- acceptable |error| in mm
             max_iterations -- correction attempts cap
             timeout_per_step -- per-move timeout in seconds
+            stall_patience -- consecutive non-improving iterations
+                tolerated before declaring the loop stalled. One
+                stalled correction is normal on a servo; this used to
+                be 1, which abandoned real moves on noise.
 
-        Return the final position in mm, or None on failure.
+        Returns:
+            A :class:`MoveResult` carrying the final position and
+            whether it is within tolerance, or ``None`` if the amp
+            stopped answering (position unknown).
+
+            **This used to return a bare float on every path**, so
+            "arrived at 0.0" and "gave up at 0.676" were
+            indistinguishable and callers reported both as success.
+            Check ``converged`` before trusting ``position_mm`` as the
+            commanded position.
         """
         current_mm = self.read_position_mm()
         if current_mm is None:
@@ -633,10 +674,11 @@ class LinearMotorController:
         )
         if abs(error_mm) <= tolerance_mm:
             print("  Already within tolerance; no motion issued.")
-            return current_mm
+            return MoveResult(current_mm, True, "already_in_tolerance")
 
         pid = PIDController()
         prev_abs_error = abs(error_mm)
+        stalled_iterations = 0
         prev_time = time.time()
         for iteration in range(max_iterations):
             now = time.time()
@@ -646,7 +688,9 @@ class LinearMotorController:
             speed = int(round(abs(out_signed)))
             if speed <= 0:
                 print(f"  iter {iteration + 1}: within deadband; stop.")
-                return current_mm
+                return MoveResult(
+                    current_mm, abs(error_mm) <= tolerance_mm, "deadband"
+                )
 
             print(
                 f"  iter {iteration + 1}: move {error_mm:+.3f} mm"
@@ -673,21 +717,26 @@ class LinearMotorController:
 
             if abs(error_mm) <= tolerance_mm:
                 print("  Converged within tolerance.")
-                return current_mm
+                return MoveResult(current_mm, True, "converged")
 
             if abs(error_mm) >= prev_abs_error:
+                stalled_iterations += 1
                 print(
-                    "  Residual stopped decreasing; aborting"
-                    " to avoid oscillation."
+                    f"  Residual did not improve"
+                    f" ({stalled_iterations}/{stall_patience})."
                 )
-                return current_mm
-            prev_abs_error = abs(error_mm)
+                if stalled_iterations >= stall_patience:
+                    print("  Stalled; aborting to avoid oscillation.")
+                    return MoveResult(current_mm, False, "stalled")
+            else:
+                stalled_iterations = 0
+                prev_abs_error = abs(error_mm)
 
         print(
             f"  Did not converge within {max_iterations} iterations;"
             f" residual {error_mm:+.4f} mm."
         )
-        return current_mm
+        return MoveResult(current_mm, False, "iteration_cap")
 
 
 def main():
